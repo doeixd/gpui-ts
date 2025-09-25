@@ -582,7 +582,7 @@ GPUI-TS is built with TypeScript-first design. Schema definitions drive complete
 
 ## Performance
 
-### Benchmarks
+<!-- ### Benchmarks
 
 Based on TodoMVC implementations:
 
@@ -591,7 +591,7 @@ Based on TodoMVC implementations:
 | GPUI-TS | 12kb gzipped | Low (centralized state) | Excellent (batched updates) |
 | Redux + RTK | 15kb gzipped | Medium (normalized state) | Good (with React.memo) |
 | Zustand | 8kb gzipped | Low | Good |
-| MobX | 16kb gzipped | Medium (proxy overhead) | Excellent |
+| MobX | 16kb gzipped | Medium (proxy overhead) | Excellent | -->
 
 ### Optimization Tips
 
