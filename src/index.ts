@@ -24,14 +24,14 @@
 // CORE TYPES AND BRANDS
 // =============================================================================
 
-declare const __modelBrand: unique symbol
-declare const __eventBrand: unique symbol
-declare const __haltBrand: unique symbol
+const __modelBrand = Symbol('__modelBrand')
+const __eventBrand = Symbol('__eventBrand')
+const __haltBrand = Symbol('__haltBrand')
 
 type ModelId<T> = string & { readonly __modelType: T }
-type EventId<TName extends string, TPayload> = string & { 
+type EventId<TName extends string, TPayload> = string & {
   readonly [__eventBrand]: TName
-  readonly __payloadType: TPayload 
+  readonly __payloadType: TPayload
 }
 type HaltSignal = { readonly [__haltBrand]: true }
 
@@ -1437,6 +1437,13 @@ function enableDevMode(app: ReturnType<typeof createApp>) {
 }
 
 // =============================================================================
+// LIT-HTML INTEGRATION
+// =============================================================================
+
+// Re-export lit-html integration
+export * from './lit.ts'
+
+// =============================================================================
 // EXPORTS - PUBLIC API
 // =============================================================================
 
@@ -1449,7 +1456,7 @@ export {
   lens,
   halt,
   enableDevMode,
-  
+
   // Types
   type ModelAPI,
   type ModelSchema,
