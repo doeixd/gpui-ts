@@ -26,15 +26,21 @@ import {
   Service,
   Action,
   Guard,
-  Producer,
+  Reducer as Producer,
+  guard,
+  immediate,
+  invoke,
+  reduce,
+  state,
+  transition,
 } from 'robot3';
 import {
   createModel,
   ModelAPI
-} from './gpui-ts-core'; // Adjust path if needed
+} from './index'; // Import from core index
 import {
   useApp
-} from './context'; // We use the context-aware `useApp` hook
+} from './ergonomic'; // Use ergonomic context API
 
 // --- TYPE DEFINITIONS ---
 
@@ -105,7 +111,7 @@ export function useMachine < TMachine extends Machine < any >> (
   const matches = (...states: string[]) => states.includes(service.machine.current);
 
   // Create the corresponding GPUI-TS model. Its state will mirror the machine's state.
-  const machineModel = createModel < MachineState < Service < TMachine >>> (
+  const machineModel = createModel<MachineState<Service<TMachine>>>(
     app,
     modelName, {
       name: service.machine.current,

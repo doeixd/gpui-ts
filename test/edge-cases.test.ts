@@ -69,7 +69,7 @@ describe('Edge Cases and Error Handling', () => {
       })
 
       // This should not cause infinite loop
-      app.models.a.update(s => s.value = 10)
+      app.models.a.update((s, ctx) => { s.value = 10; ctx.notify() })
 
       // Values should be updated
       expect(app.models.a.read().value).toBe(10)
@@ -93,14 +93,14 @@ describe('Edge Cases and Error Handling', () => {
         }))
       }
 
-      app.models.counter.update(s => s.count++)
+      app.models.counter.update((s, ctx) => { s.count++; ctx.notify() })
 
       expect(callCount).toBe(100)
 
       // Unsubscribe half of them
       listeners.slice(0, 50).forEach(unsubscribe => unsubscribe())
 
-      app.models.counter.update(s => s.count++)
+      app.models.counter.update((s, ctx) => { s.count++; ctx.notify() })
 
       expect(callCount).toBe(150) // Only 50 more calls
     })
@@ -203,7 +203,7 @@ describe('Edge Cases and Error Handling', () => {
 
       // Rapid updates
       for (let i = 0; i < 1000; i++) {
-        app.models.counter.update(s => s.count = i)
+        app.models.counter.update((s, ctx) => { s.count = i; ctx.notify() })
       }
 
       const endTime = performance.now()
@@ -301,13 +301,13 @@ describe('Edge Cases and Error Handling', () => {
         subscriptionCallCount++
       })
 
-      app.models.target.update(s => s.value = 10)
+      app.models.target.update((s, ctx) => { s.value = 10; ctx.notify() })
       expect(subscriptionCallCount).toBe(1)
 
       // Unsubscribe
       subscription.unsubscribe()
 
-      app.models.target.update(s => s.value = 20)
+      app.models.target.update((s, ctx) => { s.value = 20; ctx.notify() })
       expect(subscriptionCallCount).toBe(1) // Should not increase
     })
 
@@ -378,21 +378,30 @@ describe('Edge Cases and Error Handling', () => {
         }
       })
 
-      const usersLens = lens(
-        (s) => s.users,
-        (s, users) => ({ ...s, users })
-      )
+        // Create individual lenses
+        const usersLens = lens(
+          (s: typeof state) => s.users,
+          (s: typeof state, users) => ({ ...s, users })
+        )
 
-      const firstUserLens = usersLens.index(0)
-      const settingsLens = firstUserLens.at('settings')
-      const themeLens = settingsLens.at('theme')
+        const userAtIndexLens = lens(
+          (users: any[]) => users[0],
+          (users: any[], user) => [user, ...users.slice(1)]
+        )
 
-      const composed = usersLens.compose(firstUserLens).compose(settingsLens).compose(themeLens)
+        const settingsLens = lens(
+          (user: any) => user.settings,
+          (user: any, settings) => ({ ...user, settings })
+        )
 
-      expect(composed.get(app.models.app.read())).toBe('light')
+        // Compose them properly: users -> first user -> settings
+        const composed = usersLens.compose(userAtIndexLens).compose(settingsLens)
 
-      const updated = composed.set(app.models.app.read(), 'dark')
-      expect(updated.users[0].settings.theme).toBe('dark')
+        const root = app.models.app.read()
+        expect(root.users[0].settings.theme).toBe('light')
+
+        const updated = composed.set(root, { theme: 'dark' })
+        expect(updated.users[0].settings.theme).toBe('dark')
     })
   })
 
@@ -411,7 +420,7 @@ describe('Edge Cases and Error Handling', () => {
         promises.push(
           new Promise<void>(resolve => {
             setTimeout(() => {
-              app.models.counter.update(s => s.count++)
+              app.models.counter.update((s, ctx) => { s.count++; ctx.notify() })
               resolve()
             }, Math.random() * 10)
           })
@@ -434,13 +443,14 @@ describe('Edge Cases and Error Handling', () => {
       app.models.multi.onChange(() => notifyCount++)
 
       // Batch multiple updates
-      app.models.multi.updateWith((state, ctx) => {
-        ctx.batch(() => {
-          state.a = 10
-          state.b = 20
-          state.c = 30
-        })
-      })
+       app.models.multi.update((state, ctx) => {
+         ctx.batch(() => {
+           state.a = 10
+           state.b = 20
+           state.c = 30
+           ctx.notify()
+         })
+       })
 
       expect(app.models.multi.read()).toEqual({ a: 10, b: 20, c: 30 })
       expect(notifyCount).toBe(1) // Only one notification for the batch

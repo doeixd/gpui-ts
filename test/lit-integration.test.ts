@@ -10,6 +10,7 @@ import {
   suspense,
   devView,
   performanceView,
+  createSubject,
   type TemplateFunction
 } from '../dist/esm/development/index.js'
 import { createApp } from '../dist/esm/development/index.js'
@@ -51,7 +52,7 @@ describe('Lit-HTML Integration', () => {
       expect(container.textContent).toContain('Count: 0')
 
       // Update model
-      app.models.counter.update(s => s.count = 5)
+      app.models.counter.update((s, ctx) => { s.count = 5; ctx.notify() })
 
       // Wait for re-render
       await new Promise(resolve => setTimeout(resolve, 0))
@@ -164,7 +165,7 @@ describe('Lit-HTML Integration', () => {
   describe('Component System', () => {
     it('should create and render components', async () => {
       const CounterComponent = createComponent<{}, { count: number }>((props) => ({
-        state: { count: 0 } as any, // Simplified for test
+        state: createSubject({ count: 0 }),
         template: (state, ctx) => html`
           <div>
             <span>Count: ${state.count}</span>
@@ -195,7 +196,7 @@ describe('Lit-HTML Integration', () => {
       }
 
       const CounterComponent = createComponent<CounterProps, { count: number }>((props) => ({
-        state: { count: props.initialCount } as any,
+        state: createSubject({ count: props.initialCount }),
         template: (state, ctx) => html`
           <div>
             <span>Count: ${state.count}</span>
@@ -224,7 +225,7 @@ describe('Lit-HTML Integration', () => {
       let unmounted = false
 
       const TestComponent = createComponent<{}, { value: string }>((props) => ({
-        state: { value: 'test' } as any,
+        state: createSubject({ value: 'test' }),
         template: (state, ctx) => {
           ctx.onMount(() => {
             mounted = true
@@ -445,7 +446,7 @@ describe('Lit-HTML Integration', () => {
       expect(container.querySelector('div')).toBeTruthy()
 
       // Update to trigger re-render
-      app.models.test.update(s => s.value = 1)
+      app.models.test.update((s, ctx) => { s.value = 1; ctx.notify() })
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(renderCount).toBe(2)
 

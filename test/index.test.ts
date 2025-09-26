@@ -48,9 +48,10 @@ describe('GPUI-TS Test Suite', () => {
         notifiedValue = current.count
       })
 
-      app.models.counter.update((state) => {
-        state.count = 10
-      })
+       app.models.counter.update((state, ctx) => {
+         state.count = 10
+         ctx.notify()
+       })
 
       expect(notifiedValue).toBe(10)
 
@@ -203,7 +204,7 @@ describe('GPUI-TS Test Suite', () => {
         })
       })
 
-      app.models.source.update((state) => { state.value = 25 })
+       app.models.source.update((state, ctx) => { state.value = 25; ctx.notify() })
 
       expect(app.models.derived.read().doubled).toBe(50)
     })
@@ -246,12 +247,13 @@ describe('GPUI-TS Test Suite', () => {
       let notifyCount = 0
       app.models.counter.onChange(() => { notifyCount++ })
 
-      app.models.counter.updateWith((state, ctx) => {
-        ctx.batch(() => {
-          state.count = 1
-          state.count = 2
-          state.count = 3
-        })
+      app.models.counter.update((state, ctx) => {
+         ctx.batch(() => {
+           state.count = 1
+           state.count = 2
+           state.count = 3
+           ctx.notify()
+         })
       })
 
       expect(app.models.counter.read().count).toBe(3)

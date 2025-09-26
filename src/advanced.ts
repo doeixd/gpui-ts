@@ -19,12 +19,17 @@
  *             `createMachineModel` feature. Please install it with `npm install xstate`.
  */
 
-import { html, render, TemplateResult, directive, Directive, PartType, ChildPart } from 'lit-html';
-import { AppContext, ModelAPI, createModel, ViewContext, createView, suspense } from './gpui-ts-core'; // Assuming a central export point
+import { TemplateResult } from 'lit-html';
+import { directive, Directive, PartType, ChildPart } from 'lit-html/directive.js';
+import { ModelAPI, createView, GPUIApp } from './index'; // Import from core index
+import { ViewContext } from './lit'; // Import ViewContext
 
 // --- XState Peer Dependency Imports ---
 // These are the necessary imports for the state machine integration.
-import { createActor, AnyStateMachine, SnapshotFrom, setup, assign, Actor } from 'xstate';
+import { createActor, AnyStateMachine, SnapshotFrom, Actor } from 'xstate';
+
+// Type aliases
+type AppContext = GPUIApp<any>;
 
 // =============================================================================
 // SECTION 1: SIGNAL-BASED REACTIVITY FOR VIEWS
@@ -71,7 +76,7 @@ class Signal<T> {
  * It only notifies subscribers when its computed value actually changes.
  */
 class Computed<T> extends Signal<T> {
-  constructor(compute: () => T, sourceUnsubscribe: () => void) {
+  constructor(compute: () => T, sourceUnsubscribe: () => () => void) {
     super(compute());
     const unsubscribe = sourceUnsubscribe();
 
@@ -98,6 +103,7 @@ const signal = directive(
   class extends Directive {
     private signalInstance?: Signal<any>;
     private unsubscribe?: () => void;
+    private part?: ChildPart;
 
     // The directive is associated with a ChildPart (where content is rendered)
     constructor(partInfo: any) {
@@ -105,6 +111,7 @@ const signal = directive(
       if (partInfo.type !== PartType.CHILD) {
         throw new Error('The `signal` directive can only be used in child expressions.');
       }
+      this.part = partInfo.part as ChildPart;
     }
 
     // `render` is called with the signal instance
@@ -115,7 +122,9 @@ const signal = directive(
         this.signalInstance = sig;
         this.unsubscribe = this.signalInstance.subscribe(() => {
           // When the signal notifies, re-render just this part
-          this.setValue(this.signalInstance?.get());
+          if (this.part) {
+            (this.part as any)._$setValue(this.signalInstance?.get());
+          }
         });
       }
       return this.signalInstance.get();
@@ -132,7 +141,7 @@ const signal = directive(
 /**
  * An enhanced ViewContext that includes the `select` method.
  */
-interface ReactiveViewContext<TModel> extends ViewContext<TModel> {
+interface ReactiveViewContext<TModel extends object> extends ViewContext<TModel> {
   /**
    * Creates a fine-grained, reactive "selector" from the model's state.
    * Use this in templates with the `signal()` directive for optimal performance.
@@ -146,7 +155,7 @@ interface ReactiveViewContext<TModel> extends ViewContext<TModel> {
  * Creates a reactive view with support for fine-grained reactivity via signals.
  * This is a drop-in replacement for the original `createView`.
  */
-export function createReactiveView<TModel>(
+export function createReactiveView<TModel extends object>(
   model: ModelAPI<TModel>,
   container: Element,
   template: (state: TModel, context: ReactiveViewContext<TModel>) => TemplateResult
@@ -163,7 +172,7 @@ export function createReactiveView<TModel>(
 
         // Create a new computed signal that updates when the model changes
         const computedSignal = new Computed<R>(
-          () => selectorFn(model.read()),
+          () => selectorFn(model.read() as TModel),
           () => model.onChange(newState => {
             computedSignal.set(selectorFn(newState));
           })
@@ -174,7 +183,7 @@ export function createReactiveView<TModel>(
       },
     };
 
-    return template(state, reactiveCtx);
+    return template(state as TModel, reactiveCtx);
   });
 }
 
@@ -202,14 +211,14 @@ export interface ResourceState<TData> {
  * @param fetcher An async function that takes the source state and returns data.
  * @returns A ModelAPI for the resource's state (`{ data, loading, error }`).
  */
-export function createResource<TSource, TData>(
+export function createResource<TSource extends object, TData>(
   app: AppContext,
   name: string,
   source: ModelAPI<TSource>,
   fetcher: (sourceValue: TSource) => Promise<TData>
 ): ModelAPI<ResourceState<TData>> {
 
-  const resourceModel = createModel<ResourceState<TData>>(app, name, {
+  const resourceModel = app.createModel<ResourceState<TData>>(name, {
     data: null,
     loading: true, // Start in a loading state initially
     error: null,
@@ -219,9 +228,9 @@ export function createResource<TSource, TData>(
 
   const load = async () => {
     const currentFetchId = ++fetchId;
-    const sourceState = source.read();
+    const sourceState = source.read() as TSource;
 
-    resourceModel.update(state => {
+    resourceModel.update((state: ResourceState<TData>) => {
       state.loading = true;
       state.error = null;
     });
@@ -230,14 +239,14 @@ export function createResource<TSource, TData>(
       const data = await fetcher(sourceState);
       // Only update if this is the most recent fetch request, preventing race conditions.
       if (currentFetchId === fetchId) {
-        resourceModel.update(state => {
+        resourceModel.update((state: ResourceState<TData>) => {
           state.data = data;
           state.loading = false;
         });
       }
     } catch (e: any) {
       if (currentFetchId === fetchId) {
-        resourceModel.update(state => {
+        resourceModel.update((state: ResourceState<TData>) => {
           state.error = e instanceof Error ? e : new Error(String(e));
           state.loading = false;
         });
@@ -289,15 +298,11 @@ export function createMachineModel<TMachine extends AnyStateMachine>(
   const actor = createActor(machine).start();
 
   // Create a GPUI-TS model, using the machine's initial state as the model's initial state.
-  const machineModel = createModel<SnapshotFrom<TMachine>>(
-    app,
-    name,
-    actor.getSnapshot()
-  );
+  const machineModel = app.createModel<SnapshotFrom<TMachine>>(name, actor.getSnapshot());
 
   // Bridge XState to GPUI-TS: When the actor's state changes, update the GPUI-TS model.
   actor.subscribe(snapshot => {
-    machineModel.update(state => {
+    machineModel.update((state: SnapshotFrom<TMachine>) => {
       // We use Object.assign to update the state in place, which is how GPUI-TS updaters work.
       Object.assign(state, snapshot);
     });

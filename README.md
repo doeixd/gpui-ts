@@ -138,6 +138,14 @@ app.models.user.updateIf(
     user.profile.lastSeen = new Date()
   }
 )
+
+// ✅ Convenience methods for common patterns
+app.models.counter.updateAndNotify(state => state.count++) // Automatic notification
+app.models.ui.set('theme', 'dark') // Direct value assignment
+app.models.settings.toggle('notifications') // Boolean toggle
+app.models.todos.push('items', newTodo) // Add to array
+app.models.todos.removeWhere('items', item => item.completed) // Remove from array
+app.models.form.reset() // Reset to initial state
 ```
 
 ### Events: Functional Reactive Composition
@@ -169,10 +177,10 @@ Subjects automatically update when their dependencies change:
 // Subjects respond to multiple event sources
 const todoStats = createSubject(
   { total: 0, completed: 0, active: 0 },
-  onTodoAdded(() => stats => ({ 
-    ...stats, 
-    total: stats.total + 1, 
-    active: stats.active + 1 
+  onTodoAdded(() => stats => ({
+    ...stats,
+    total: stats.total + 1,
+    active: stats.active + 1
   })),
   onTodoToggled(({ completed }) => stats => ({
     ...stats,
@@ -180,6 +188,60 @@ const todoStats = createSubject(
     active: completed ? stats.active - 1 : stats.active + 1
   }))
 )
+```
+
+### Lenses: Composable Data Access
+
+Lenses provide functional, immutable access to nested data structures with full type safety:
+
+```typescript
+// Basic lens creation
+const nameLens = lens(
+  (user) => user.name,
+  (user, name) => ({ ...user, name })
+)
+
+// Lens composition
+const profileLens = lens(
+  (user) => user.profile,
+  (user, profile) => ({ ...user, profile })
+)
+const nameLens = lens(
+  (profile) => profile.name,
+  (profile, name) => ({ ...profile, name })
+)
+const userNameLens = profileLens.compose(nameLens)
+
+// Using at() for property access
+const emailLens = userLens.at('profile').at('email')
+
+// Array operations
+const itemsLens = lens(
+  (state) => state.items,
+  (state, items) => ({ ...state, items })
+)
+const firstItemLens = itemsLens.index(0)
+const activeItemsLens = itemsLens.filter(item => item.active)
+const firstActiveLens = itemsLens.find(item => item.active)
+
+// Advanced operations
+const namesLens = itemsLens.map(item => item.name) // Read-only
+const hasActiveLens = itemsLens.some(item => item.active) // Read-only
+const totalValueLens = itemsLens.reduce((sum, item) => sum + item.value, 0) // Read-only
+
+// Model integration
+const userName = app.models.user.lensAt('profile.name')
+app.models.user.update((state) => {
+  const newState = userName.set(state, 'Jane')
+  Object.assign(state, newState)
+})
+
+// Focused models
+const profileFocus = app.models.user.focus(profileLens)
+profileFocus.update(profile => {
+  profile.name = 'Jane'
+  profile.age = 31
+})
 ```
 
 ### Schemas: Type-Safe App Definition
@@ -207,6 +269,70 @@ const BlogSchema = createSchema()
 // TypeScript infers everything:
 // app.models.posts.updateAt('items.0.title', title => ...)
 // app.models.user.readAt('preferences.theme') // 'light' | 'dark'
+```
+
+## Dynamic Schema Management
+
+GPUI-TS supports dynamic schema modifications at runtime and build time, enabling advanced patterns like code-splitting, plugins, and modular architectures.
+
+### Runtime Schema Modification
+
+For applications that need to add or remove features dynamically (e.g., code-splitting, plugins):
+
+```typescript
+import { createApp, addModel, removeModel, addEvent } from 'gpui-ts'
+
+let app = createApp(createSchema()
+  .model('user', { name: '' })
+  .build()
+)
+
+// Add a new model dynamically
+app = addModel(app, 'posts', {
+  initialState: { items: [], loading: false }
+})
+
+// The app is now fully typed with the new model
+app.models.posts.update(state => {
+  state.loading = true
+})
+
+// Add events dynamically
+app = addEvent(app, 'postCreated', {
+  payload: { title: string }
+})
+
+// Remove models when features are unloaded
+app = removeModel(app, 'posts')
+// TypeScript now knows posts is gone
+```
+
+### Build-Time Schema Composition
+
+For composing schemas from multiple modules before app creation:
+
+```typescript
+import { createSchema, addModelToSchema, removeModelFromSchema, addEventToSchema } from 'gpui-ts/helpers'
+
+// Feature modules can contribute to schema
+export function withAuth(builder) {
+  let newBuilder = addModelToSchema(builder, 'auth', { user: null })
+  return addEventToSchema(newBuilder, 'login', { payload: { email: '' } })
+}
+
+export function withTodos(builder) {
+  return addModelToSchema(builder, 'todos', { items: [] })
+}
+
+// Compose in main app
+let schemaBuilder = createSchema()
+  .model('ui', { theme: 'dark' })
+
+schemaBuilder = withAuth(schemaBuilder)
+schemaBuilder = withTodos(schemaBuilder)
+
+const app = createApp(schemaBuilder.build())
+// app.models is fully typed with ui, auth, and todos
 ```
 
 ## API Reference
@@ -259,6 +385,62 @@ const count = createSubject(
 )
 ```
 
+#### `addModel<TApp, TModelName, TState>(app, modelName, modelDefinition)`
+
+Dynamically adds a new model to a running GPUI application:
+
+```typescript
+let app = createApp(MySchema)
+app = addModel(app, 'posts', {
+  initialState: { items: [], loading: false }
+})
+// app.models.posts is now available and fully typed
+```
+
+#### `removeModel<TApp, TModelName>(app, modelName)`
+
+Removes a model from a running GPUI application and cleans up resources:
+
+```typescript
+app = removeModel(app, 'posts')
+// app.models.posts is now undefined and TypeScript knows it's gone
+```
+
+#### `addEvent<TApp, TEventName, TPayload>(app, eventName, payloadDef)`
+
+Adds a new event definition to the application schema:
+
+```typescript
+app = addEvent(app, 'postCreated', {
+  payload: { title: string, content: string }
+})
+```
+
+#### `addModelToSchema<TBuilder, TModelName, TState>(builder, modelName, initialState)`
+
+Build-time helper for adding models to schema builders:
+
+```typescript
+let builder = createSchema().model('user', { name: '' })
+builder = addModelToSchema(builder, 'posts', { items: [] })
+```
+
+#### `removeModelFromSchema<TBuilder, TModelName>(builder, modelName)`
+
+Build-time helper for removing models from schema builders:
+
+```typescript
+builder = removeModelFromSchema(builder, 'posts')
+```
+
+#### `addEventToSchema<TBuilder, TEventName, TPayload>(builder, eventName, payloadDef)`
+
+Build-time helper for adding events to schema builders:
+
+```typescript
+builder = addEventToSchema(builder, 'login', { payload: { email: '' } })
+```
+
 ### Model API
 
 ```typescript
@@ -266,20 +448,36 @@ interface ModelAPI<T> {
   // State access
   read(): T
   readAt<P extends Path<T>>(path: P): PathValue<T, P>
-  
+
   // Updates
   update(updater: (state: T, ctx: ModelContext<T>) => void): this
   updateAt<P extends Path<T>>(path: P, updater: (value: PathValue<T, P>) => PathValue<T, P>): this
   updateIf<TGuard extends T>(guard: (state: T) => state is TGuard, updater: (state: TGuard, ctx: ModelContext<T>) => void): this
-  
+  updateAndNotify(updater: (state: T) => void, onError?: (error: unknown, initialState: DeepReadonly<T>) => void): this
+
+  // Helper methods for common state manipulations
+  set<P extends Path<T>>(path: P, value: PathValue<T, P>): this
+  toggle<P extends Path<T>>(path: PathValue<T, P> extends boolean ? P : never): this
+  reset(): this
+  push<P extends Path<T>>(path: P, ...items: PathValue<T, P> extends (infer U)[] ? U[] : never): this
+  removeWhere<P extends Path<T>>(path: P, predicate: (item: PathValue<T, P> extends (infer U)[] ? U : never) => boolean): this
+  updateAsync<LoadingKey extends keyof T, ErrorKey extends keyof T>(
+    updater: (state: T) => Promise<Partial<T>>,
+    options: {
+      loadingKey: PathValue<T, LoadingKey> extends boolean ? LoadingKey : never
+      errorKey: ErrorKey
+      onError?: (error: unknown, initialState: DeepReadonly<T>) => void
+    }
+  ): Promise<void>
+
   // Events
   emit<TEvent>(event: TEvent): this
   onEvent<TEvent>(handler: (event: TEvent) => void): () => void
-  
+
   // Subscriptions
   onChange(listener: (current: T, previous: T) => void): () => void
   subscribeTo<TSource>(source: ModelAPI<TSource>, reaction: (source: TSource, target: T, ctx: ModelContext<T>) => void): ModelSubscription
-  
+
   // Advanced
   lens<TFocus>(getter: (state: T) => TFocus): Lens<T, TFocus>
   focus<TFocus>(lens: Lens<T, TFocus>): FocusedModel<TFocus, T>

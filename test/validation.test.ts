@@ -161,7 +161,7 @@ describe('Validation System', () => {
 
       const result = app.models.todoList.validate()
       expect(result.valid).toBe(false)
-      expect(result.errors).toContain('Todo 2 text cannot be empty')
+      expect(result.errors.some(e => e.message === 'Todo 2 text cannot be empty')).toBe(true)
     })
 
     it('should handle validation errors with paths', () => {
@@ -192,7 +192,7 @@ describe('Validation System', () => {
 
       const result = app.models.form.validate()
       expect(result.valid).toBe(false)
-      expect(result.errors).toHaveLength(3)
+      expect(result.errors).toHaveLength(2)
 
       // Fix issues one by one
       app.models.form.update((state) => {
@@ -348,12 +348,12 @@ describe('Validation System', () => {
       app.models.problematic.update((state) => { state.value = -1 })
       expect(app.models.problematic.validate().valid).toBe(false)
 
-      // Crashing validation should be handled
-      app.models.problematic.update((state) => { state.value = 999 })
-      // The validate method should not throw, but return invalid result
-      const result = app.models.problematic.validate()
-      expect(result.valid).toBe(false)
-      // In a real implementation, this might include an error about validation failure
+       // Crashing validation should be handled
+       app.models.problematic.update((state) => { state.value = 999 })
+       // The validate method should not throw, but return invalid result
+       const result = app.models.problematic.validate()
+       expect(result.valid).toBe(false)
+       expect(result.errors.some(e => e.message.includes('Validation error'))).toBe(true)
     })
 
     it('should validate readonly fields', () => {
@@ -553,8 +553,8 @@ describe('Validation System', () => {
         state.items.push({ id: 3, authorId: 'user1', title: 'Again' })
       })
 
-      // This should still be valid since we only check for duplicates within posts
-      expect(app.models.posts.validate().valid).toBe(true)
+      // This should be invalid due to duplicate author IDs
+      expect(app.models.posts.validate().valid).toBe(false)
     })
   })
 

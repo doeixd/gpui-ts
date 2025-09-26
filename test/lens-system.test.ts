@@ -165,6 +165,116 @@ describe('Lens System', () => {
       expect(updated.items[0].name).toBe('Updated A')
       expect(updated.items[2].name).toBe('Updated C')
     })
+
+    it('should support find() method for finding first element', () => {
+      const itemsLens = lens(
+        (state) => state.items,
+        (state, items) => ({ ...state, items })
+      )
+
+      const activeItemLens = itemsLens.find((item) => item.active)
+
+      const state = {
+        items: [
+          { id: 1, active: false, name: 'A' },
+          { id: 2, active: true, name: 'B' },
+          { id: 3, active: true, name: 'C' }
+        ]
+      }
+
+      expect(activeItemLens.get(state)).toEqual({ id: 2, active: true, name: 'B' })
+
+      const updated = activeItemLens.set(state, { id: 2, active: true, name: 'Updated B' })
+      expect(updated.items[1].name).toBe('Updated B')
+    })
+
+    it('should support map() method for transforming arrays', () => {
+      const itemsLens = lens(
+        (state) => state.items,
+        (state, items) => ({ ...state, items })
+      )
+
+      const namesLens = itemsLens.map((item) => item.name)
+
+      const state = {
+        items: [
+          { id: 1, name: 'A' },
+          { id: 2, name: 'B' }
+        ]
+      }
+
+      expect(namesLens.get(state)).toEqual(['A', 'B'])
+
+      // Setting back is not supported, should return unchanged
+      const updated = namesLens.set(state, ['X', 'Y'])
+      expect(updated).toBe(state)
+    })
+
+    it('should support some() method for checking condition', () => {
+      const itemsLens = lens(
+        (state) => state.items,
+        (state, items) => ({ ...state, items })
+      )
+
+      const hasActiveLens = itemsLens.some((item) => item.active)
+
+      const state = {
+        items: [
+          { id: 1, active: false },
+          { id: 2, active: true }
+        ]
+      }
+
+      expect(hasActiveLens.get(state)).toBe(true)
+
+      // Setting back is not supported
+      const updated = hasActiveLens.set(state, false)
+      expect(updated).toBe(state)
+    })
+
+    it('should support every() method for checking all conditions', () => {
+      const itemsLens = lens(
+        (state) => state.items,
+        (state, items) => ({ ...state, items })
+      )
+
+      const allActiveLens = itemsLens.every((item) => item.active)
+
+      const state = {
+        items: [
+          { id: 1, active: true },
+          { id: 2, active: true }
+        ]
+      }
+
+      expect(allActiveLens.get(state)).toBe(true)
+
+      // Setting back is not supported
+      const updated = allActiveLens.set(state, false)
+      expect(updated).toBe(state)
+    })
+
+    it('should support reduce() method for reducing arrays', () => {
+      const itemsLens = lens(
+        (state) => state.items,
+        (state, items) => ({ ...state, items })
+      )
+
+      const totalLens = itemsLens.reduce((acc, item) => acc + item.value, 0)
+
+      const state = {
+        items: [
+          { value: 10 },
+          { value: 20 }
+        ]
+      }
+
+      expect(totalLens.get(state)).toBe(30)
+
+      // Setting back is not supported
+      const updated = totalLens.set(state, 50)
+      expect(updated).toBe(state)
+    })
   })
 
   describe('Path-based Lens Operations', () => {
@@ -338,9 +448,9 @@ describe('Lens System', () => {
         lastPrevious = previous
       })
 
-      focused.update((profile) => {
-        profile.name = 'Jane'
-      })
+        focused.update((profile) => {
+          profile.name = 'Jane'
+        })
 
       expect(changeCount).toBe(1)
       expect(lastCurrent.name).toBe('Jane')

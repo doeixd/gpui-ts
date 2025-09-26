@@ -75,6 +75,43 @@ const todosStore = app.models.todos;
 
 The key architectural difference is that GPUI-TS `Models` are **centrally defined and instantiated together**. This enforces a single, unified source of truth for your entire application's state from the outset.
 
+### Convenience Methods for Common Patterns
+
+While GPUI-TS emphasizes explicit updates, it also provides ergonomic helper methods for the most common state mutation patterns. These methods automatically handle notifications and maintain the explicit philosophy:
+
+```typescript
+// Direct value assignment
+app.models.user.set('profile.name', 'Alice')
+
+// Boolean toggling
+app.models.settings.toggle('darkMode')
+
+// Array operations
+app.models.todos.push('items', newTodo)
+app.models.todos.removeWhere('items', item => item.completed)
+
+// Reset to initial state
+app.models.form.reset()
+
+// Async operations with loading states
+await app.models.user.updateAsync(
+  async () => {
+    const user = await fetchUser()
+    return { profile: user }
+  },
+  {
+    loadingKey: 'isLoading',
+    errorKey: 'error',
+    onError: (error, initialState) => console.error('Failed to load user:', error)
+  }
+)
+
+// Simple updates with automatic notification
+app.models.counter.updateAndNotify(state => state.count++)
+```
+
+These helpers reduce boilerplate while maintaining the explicit, transactional nature of GPUI-TS updates.
+
 ### When to Use a Model
 
 You should use a `Model` for any state that is:

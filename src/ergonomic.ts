@@ -28,13 +28,13 @@ import {
   createApp,
   EventScope,
   ModelAPI,
-} from './gpui-ts-core'; // Adjust path if your core exports are elsewhere
+} from './index'; // Import from core index
 import {
   createResource,
   createMachineModel,
   ResourceState,
   MachineModelAPI,
-} from './advanced'; // Adjust path to your advanced features module
+} from './advanced'; // Import advanced features
 import { AnyStateMachine } from 'xstate';
 
 
@@ -53,10 +53,7 @@ export type GPUIApp<TSchema extends AppSchema> = ReturnType<typeof createApp<TSc
  * The namespaced context for the GPUI-TS application.
  * Using a unique key ('gpui-ts-app-context') prevents conflicts with other libraries.
  */
-const appContext = getContext<GPUIApp<any>>('gpui-ts-app-context', {
-  errorMessage:
-    '[GPUI-TS] A context-aware hook (like useApp or useModel) was called outside of an active application. Ensure your app is initialized with `createAppWithContext`.',
-});
+const appContext = getContext<GPUIApp<any>>('gpui-ts-app-context');
 
 
 // --- CORE API ---
@@ -143,7 +140,7 @@ export function useEventScope(): EventScope {
  * @param fetcher An async function that takes the source state and returns data.
  * @returns A ModelAPI for the resource's state (`{ data, loading, error }`).
  */
-export function useResource<TSource, TData>(
+export function useResource<TSource extends object, TData>(
   name: string,
   source: ModelAPI<TSource>,
   fetcher: (sourceValue: TSource) => Promise<TData>

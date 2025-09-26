@@ -26,15 +26,17 @@ import { styleMap } from 'lit-html/directives/style-map.js'
 import { ifDefined } from 'lit-html/directives/if-defined.js'
 import { live } from 'lit-html/directives/live.js'
 
-import type { 
-  ModelAPI, 
-  Subject, 
-  EventHandler, 
+import type {
+  ModelAPI,
+  Subject,
+  EventHandler,
   EventDefinition,
-  AppSchema,
   Path,
-  PathValue 
-} from './gpui-ts'
+  PathValue,
+  ComputedProperty,
+  DeepReadonly
+} from './index'
+import { lens, createEvent, getNestedProperty, setNestedProperty } from './index'
 
 // =============================================================================
 // CORE VIEW TYPES
@@ -43,15 +45,15 @@ import type {
 /**
  * Template function that receives model state and returns lit-html template
  */
-type TemplateFunction<TModel> = (
-  state: TModel,
+type TemplateFunction<TModel extends object> = (
+  state: DeepReadonly<TModel>,
   context: ViewContext<TModel>
 ) => TemplateResult | SVGTemplateResult
 
 /**
  * View context passed to template functions
  */
-interface ViewContext<TModel> {
+interface ViewContext<TModel extends object> {
   readonly model: ModelAPI<TModel>
   
   // Event helpers
@@ -63,13 +65,13 @@ interface ViewContext<TModel> {
   updateAt<P extends Path<TModel>>(path: P, updater: (value: PathValue<TModel, P>) => PathValue<TModel, P>): void
   
   // Utilities
-  bind<K extends keyof TModel>(key: K): {
-    value: TModel[K]
-    onChange: (e: Event) => void
-  }
+   bind<K extends keyof DeepReadonly<TModel>>(key: K): {
+     value: DeepReadonly<TModel>[K]
+     onChange: (e: Event) => void
+   }
   
   // Nested views
-  view<TOther>(otherModel: ModelAPI<TOther>, template: TemplateFunction<TOther>): TemplateResult
+  view<TOther extends object>(otherModel: ModelAPI<TOther>, template: TemplateFunction<TOther>): TemplateResult
   
   // Performance
   memo<T>(compute: () => T, deps?: any[]): T
@@ -82,18 +84,21 @@ interface ViewContext<TModel> {
 /**
  * View instance with lifecycle management
  */
-interface View<TModel> {
+interface View<TModel extends object> {
   readonly model: ModelAPI<TModel>
   readonly container: Element
-  readonly template: TemplateFunction<TModel>
-  
+  template: TemplateFunction<TModel>
+
   // Lifecycle
+  onMount(callback: () => void | (() => void)): void
+  onUnmount(callback: () => void): void
   render(): void
   destroy(): void
-  
+  onUnmount(callback: () => void): void
+
   // State
   readonly mounted: boolean
-  
+
   // Update the template
   updateTemplate(newTemplate: TemplateFunction<TModel>): void
 }
@@ -101,7 +106,7 @@ interface View<TModel> {
 /**
  * Component-like view with props and state
  */
-interface ViewComponent<TProps = {}, TState = {}> {
+interface ViewComponent<TProps = {}, TState extends object = {}> {
   (props: TProps): {
     state: Subject<TState>
     template: TemplateFunction<TState>
@@ -118,7 +123,7 @@ interface ViewComponent<TProps = {}, TState = {}> {
 /**
  * Create a reactive view that automatically re-renders when model changes
  */
-function createView<TModel>(
+function createView<TModel extends object>(
   model: ModelAPI<TModel>,
   container: Element,
   template: TemplateFunction<TModel>
@@ -142,7 +147,7 @@ function createView<TModel>(
         if ('emit' in event) {
           event.emit(payload)
         } else {
-          event.subscribe(() => {})(payload) // This is a simplification
+          event.subscribe(() => {}) // This is a simplification
         }
       }
     },
@@ -161,19 +166,19 @@ function createView<TModel>(
       model.updateAt(path, updater)
     },
     
-    bind: <K extends keyof TModel>(key: K) => {
+    bind: <K extends keyof DeepReadonly<TModel>>(key: K) => {
       const currentState = model.read()
       return {
         value: currentState[key],
         onChange: (e: Event) => {
           const target = e.target as HTMLInputElement
           const value = target.type === 'checkbox' ? target.checked : target.value
-          model.updateAt(key as Path<TModel>, () => value as any)
+          model.updateAt(key as any as Path<TModel>, () => value as any)
         }
       }
     },
     
-    view: <TOther>(otherModel: ModelAPI<TOther>, otherTemplate: TemplateFunction<TOther>) => {
+    view: <TOther extends object>(otherModel: ModelAPI<TOther>, otherTemplate: TemplateFunction<TOther>) => {
       // Create nested view that shares lifecycle
       const nestedContext = createNestedContext(otherModel)
       return otherTemplate(otherModel.read(), nestedContext)
@@ -202,23 +207,23 @@ function createView<TModel>(
   })
   
   // Create nested context for child views
-  const createNestedContext = <TOther>(otherModel: ModelAPI<TOther>): ViewContext<TOther> => ({
+  const createNestedContext = <TOther extends object>(otherModel: ModelAPI<TOther>): ViewContext<TOther> => ({
     model: otherModel,
     emit: (event) => otherModel.emit(event),
     on: createContext().on,
     update: (updater) => otherModel.update((state, ctx) => { updater(state); ctx.notify() }),
     updateAt: (path, updater) => otherModel.updateAt(path, updater),
-    bind: (key) => {
-      const currentState = otherModel.read()
-      return {
-        value: currentState[key],
-        onChange: (e: Event) => {
-          const target = e.target as HTMLInputElement
-          const value = target.type === 'checkbox' ? target.checked : target.value
-          otherModel.updateAt(key as any, () => value as any)
+      bind: <K extends keyof DeepReadonly<TOther>>(key: K) => {
+        const currentState = otherModel.read()
+        return {
+          value: currentState[key],
+          onChange: (e: Event) => {
+            const target = e.target as HTMLInputElement
+            const value = target.type === 'checkbox' ? target.checked : target.value
+            otherModel.updateAt(key as any as Path<TOther>, () => value as any)
+          }
         }
-      }
-    },
+      },
     view: createContext().view,
     memo: createContext().memo,
     onMount: createContext().onMount,
@@ -228,12 +233,12 @@ function createView<TModel>(
   // Render function
   const renderView = () => {
     if (isDestroyed) return
-    
+
     try {
       const state = model.read()
       const context = createContext()
-      const result = template(state, context)
-      render(result, container)
+      const result = view.template(state, context)
+      render(result, container as HTMLElement)
       
       // Run mount effects if first render
       if (!isMounted) {
@@ -245,7 +250,7 @@ function createView<TModel>(
       }
     } catch (error) {
       console.error('Error rendering view:', error)
-      render(html`<div style="color: red;">Render Error: ${error}</div>`, container)
+      render(html`<div style="color: red;">Render Error: ${error}</div>`, container as HTMLElement)
     }
   }
   
@@ -269,26 +274,34 @@ function createView<TModel>(
     },
     
     render: renderView,
-    
+
+    onMount: (callback: () => void | (() => void)) => {
+      mountCallbacks.add(callback)
+    },
+
+    onUnmount: (callback: () => void) => {
+      cleanupCallbacks.add(callback)
+    },
+
     destroy: () => {
       if (isDestroyed) return
-      
+
       isDestroyed = true
       isMounted = false
-      
+
       // Run cleanup callbacks
       cleanupCallbacks.forEach(cleanup => cleanup())
       cleanupCallbacks.clear()
       mountCallbacks.clear()
       memoCache.clear()
-      
+
       // Clear container
-      render(html``, container)
+      render(html``, container as HTMLElement)
     },
-    
+
     updateTemplate: (newTemplate: TemplateFunction<TModel>) => {
       if (isDestroyed) return
-      Object.defineProperty(view, 'template', { value: newTemplate, writable: true })
+      view.template = newTemplate
       renderView()
     }
   }
@@ -302,7 +315,7 @@ function createView<TModel>(
 /**
  * Shorthand for creating and immediately rendering a view
  */
-function renderView<TModel>(
+function renderView<TModel extends object>(
   model: ModelAPI<TModel>,
   container: Element,
   template: TemplateFunction<TModel>
@@ -317,7 +330,7 @@ function renderView<TModel>(
 /**
  * Create a reusable view component
  */
-function createComponent<TProps = {}, TState = {}>(
+function createComponent<TProps = {}, TState extends object = {}>(
   component: ViewComponent<TProps, TState>
 ): (props: TProps, container: Element) => View<TState> {
   return (props: TProps, container: Element) => {
@@ -354,8 +367,9 @@ function createComponent<TProps = {}, TState = {}>(
 /**
  * Create a minimal model API for component state
  */
-function createComponentModel<T>(subject: Subject<T>): ModelAPI<T> {
-  return {
+function createComponentModel<T extends object>(subject: Subject<T>): ModelAPI<T> {
+  const api: ModelAPI<T> = {} as any
+  Object.assign(api, {
     id: 'component' as any,
     name: 'component' as any,
     schema: { initialState: subject() },
@@ -364,27 +378,28 @@ function createComponentModel<T>(subject: Subject<T>): ModelAPI<T> {
     read: () => subject(),
     readAt: (path: any) => getPathValue(subject(), path),
     
-    update: function(updater) {
-      const currentState = subject()
-      updater(currentState, {} as any)
-      subject.set(currentState)
-      return this
-    },
+      update: function(updater: any) {
+        const currentState = subject()
+        const mockCtx = { notify: () => {} } as any
+        updater(currentState, mockCtx)
+        subject.set(currentState)
+        return this
+      },
     
-    updateAt: function(path, updater) {
+    updateAt: function(path: any, updater: any) {
       const currentState = subject()
-      const currentValue = getPathValue(currentState, path)
+      const currentValue = getPathValue(currentState, path as string)
       const newValue = updater(currentValue)
-      setPathValue(currentState, path, newValue)
+      setPathValue(currentState, path as string, newValue)
       subject.set(currentState)
       return this
     },
     
-    updateWith: (updater) => {
-      return updater(subject(), {} as any)
+    updateWith: (updater: any) => {
+      return updater(subject() as DeepReadonly<T>, {} as any)
     },
     
-    updateIf: function(guard, updater) {
+    updateIf: function(guard: any, updater: any) {
       const currentState = subject()
       if (guard(currentState)) {
         updater(currentState, {} as any)
@@ -393,7 +408,7 @@ function createComponentModel<T>(subject: Subject<T>): ModelAPI<T> {
       return this
     },
     
-    updateWhen: function(condition, updater) {
+    updateWhen: function(condition: any, updater: any) {
       const currentState = subject()
       if (condition(currentState)) {
         updater(currentState, {} as any)
@@ -402,37 +417,148 @@ function createComponentModel<T>(subject: Subject<T>): ModelAPI<T> {
       return this
     },
     
-    onChange: (listener) => {
-      // This is simplified - real implementation would track previous state
-      let previous = subject()
-      const unsubscribe = () => {} // Subject doesn't provide unsubscribe in our interface
-      setInterval(() => {
-        const current = subject()
+      onChange: (listener: any) => {
+        let previous = subject()
+        return subject.subscribe(() => {
+          const current = subject()
+          listener(current, previous)
+          previous = structuredClone(current)
+        })
+      },
+    
+    lens: <TFocus>(getter: (state: T) => TFocus) => lens<T, TFocus>(getter, (_root, _value) => {
+      const current = subject()
+      const newState = structuredClone(current)
+      // This is a simplified merge - assumes getter returns a direct property
+      return newState
+    }),
+
+    lensAt: <P extends Path<T>>(path: P) => lens<T, any>(
+      (root) => getNestedProperty(root, path as string) as PathValue<T, P>,
+      (root, value) => {
+        const newRoot = structuredClone(root)
+        setNestedProperty(newRoot, path as string, value)
+        return newRoot
+      }
+    ),
+
+    focus: <TFocus>(targetLens: any) => {
+      // Simplified focus implementation
+      return {
+        read: () => targetLens.get(subject()),
+        update: (updater: (focus: TFocus) => TFocus | void) => {
+          const current = subject()
+          const currentFocus = targetLens.get(current)
+          const updatedFocus = updater(currentFocus)
+          const newFocus = updatedFocus !== undefined ? updatedFocus : currentFocus
+          const newRoot = targetLens.set(current, newFocus)
+          subject.set(newRoot)
+        },
+        onChange: (listener: (current: TFocus, previous: TFocus) => void) => {
+          let previous = targetLens.get(subject())
+          return subject.subscribe(() => {
+            const current = targetLens.get(subject())
+            if (current !== previous) {
+              listener(current, previous)
+              previous = current
+            }
+          })
+        },
+        focus: (nextLens: any) => api.focus(targetLens.compose(nextLens)),
+        root: () => api
+      } as any
+    },
+
+    onChangeAt: <P extends Path<T>>(path: P, listener: (current: PathValue<T, P>, previous: PathValue<T, P>) => void) => {
+      let previous = getNestedProperty(subject(), path as string)
+      return subject.subscribe(() => {
+        const current = getNestedProperty(subject(), path as string)
         if (current !== previous) {
           listener(current, previous)
           previous = current
         }
-      }, 16) // 60fps polling - not ideal but works for demo
-      return unsubscribe
+      })
     },
-    
-    // Simplified implementations for other methods
-    lens: () => ({} as any),
-    lensAt: () => ({} as any),
-    focus: () => ({} as any),
-    onChangeAt: () => () => {},
-    createEvent: () => ({} as any),
-    emit: function() { return this },
-    onEvent: () => () => {},
-    subscribeTo: () => ({} as any),
-    compute: () => (() => {}) as any,
+
+    createEvent: <TEventName extends string, TPayload>(eventName: TEventName, defaultPayload: TPayload) => {
+      const event = createEvent<TPayload>()
+      return {
+        eventId: Symbol(`event:${eventName}`) as any,
+        name: eventName,
+        defaultPayload,
+        subscribe: event[1],
+        emit: event[1],
+        filter: (predicate: any) => event[0].filter(predicate),
+        map: (transform: any) => event[0].map(transform),
+        debounce: (ms: any) => event[0].debounce(ms),
+        throttle: (ms: any) => event[0].throttle(ms)
+      } as any
+    },
+
+    emit: function<TEvent>(event: TEvent) {
+      // Simplified - just log
+      console.log('Component event emitted:', event)
+      return this as any
+    },
+
+    onEvent: <TEvent>(handler: (event: TEvent) => void) => {
+      // Simplified - no implementation
+      console.log('onEvent handler:', handler)
+      return () => {}
+    },
+
+    subscribeTo: () => ({
+      id: 'component-sub',
+      unsubscribe: () => {},
+      pause: () => {},
+      resume: () => {},
+      transform: () => api,
+      when: () => api,
+      throttle: () => api,
+      debounce: () => api
+    } as any),
+
+    compute: <TResult>(name: string, computation: (state: T) => TResult) => {
+      const prop = (() => computation(subject())) as ComputedProperty<TResult>
+      Object.assign(prop, {
+        isComputed: true as const,
+        invalidate: () => {},
+        dependencies: [name]
+      })
+      return prop
+    },
+
     validate: () => ({ valid: true, errors: [] }),
-    transaction: (work) => work({} as any),
-    snapshot: () => ({} as any),
-    restore: function() { return this },
-    debug: () => ({} as any),
-    is: () => false as any
-  }
+
+    transaction: <TResult>(work: (ctx: any) => TResult) => {
+      const mockCtx = {
+        read: () => subject(),
+        notify: () => {},
+        emit: () => {},
+        updateWith: (updater: any) => updater(subject(), mockCtx)
+      }
+      return work(mockCtx)
+    },
+
+    snapshot: () => ({
+      timestamp: new Date(),
+      state: structuredClone(subject()),
+      metadata: { version: 1, checksum: 'component' }
+    }),
+
+    restore: function(snapshot: any) {
+      subject.set(snapshot.state)
+      return this
+    },
+
+    debug: () => ({
+      state: subject(),
+      computedValues: {},
+      subscriptions: [],
+      performance: { updateCount: 0, lastUpdateDuration: 0, averageUpdateDuration: 0 }
+    })
+  })
+  return api
 }
 
 // =============================================================================
@@ -442,7 +568,7 @@ function createComponentModel<T>(subject: Subject<T>): ModelAPI<T> {
 /**
  * Directive for binding form inputs to model properties
  */
-function bind<TModel, K extends keyof TModel>(
+function bind<TModel extends object, K extends keyof TModel>(
   model: ModelAPI<TModel>,
   key: K
 ) {
@@ -452,9 +578,9 @@ function bind<TModel, K extends keyof TModel>(
     
     // Set initial value
     if (input.type === 'checkbox') {
-      input.checked = Boolean(currentState[key])
+      input.checked = Boolean((currentState as any)[key])
     } else {
-      input.value = String(currentState[key] || '')
+      input.value = String((currentState as any)[key] || '')
     }
     
     // Listen for changes
@@ -477,9 +603,9 @@ function bind<TModel, K extends keyof TModel>(
 /**
  * Directive for conditional rendering based on model state
  */
-function when<TModel>(
+function when<TModel extends object>(
   model: ModelAPI<TModel>,
-  condition: (state: TModel) => boolean,
+  condition: (state: DeepReadonly<TModel>) => boolean,
   template: TemplateResult
 ) {
   const state = model.read()
@@ -489,9 +615,9 @@ function when<TModel>(
 /**
  * Directive for rendering lists with automatic key management
  */
-function forEach<TItem, TModel>(
+function forEach<TItem, TModel extends object>(
   model: ModelAPI<TModel>,
-  getItems: (state: TModel) => TItem[],
+  getItems: (state: DeepReadonly<TModel>) => TItem[],
   keyFn: (item: TItem, index: number) => string | number,
   template: (item: TItem, index: number) => TemplateResult
 ) {
@@ -558,8 +684,8 @@ function suspense<T>(
 /**
  * Development mode view wrapper with debugging
  */
-function devView<TModel>(
-  model: ModelAPI<TModel>,
+function devView<TModel extends object>(
+  _model: ModelAPI<TModel>,
   template: TemplateFunction<TModel>,
   options: {
     name?: string
@@ -573,9 +699,9 @@ function devView<TModel>(
     return template
   }
   
-  let renderCount = 0
-  
-  return (state: TModel, context: ViewContext<TModel>) => {
+   let renderCount = 0
+
+   return (state: DeepReadonly<TModel>, context: ViewContext<TModel>) => {
     renderCount++
     
     if (logRenders) {
@@ -599,13 +725,13 @@ function devView<TModel>(
 /**
  * Performance monitoring for views
  */
-function performanceView<TModel>(
+function performanceView<TModel extends object>(
   model: ModelAPI<TModel>,
   template: TemplateFunction<TModel>
 ): TemplateFunction<TModel> {
   const renderTimes: number[] = []
   
-  return (state: TModel, context: ViewContext<TModel>) => {
+   return (state: DeepReadonly<TModel>, context: ViewContext<TModel>) => {
     const startTime = performance.now()
     
     const result = template(state, context)
