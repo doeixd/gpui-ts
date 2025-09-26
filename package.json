@@ -1,6 +1,6 @@
 {
   "name": "gpui-ts",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "files": [
     "dist",
     "src"
@@ -10,17 +10,37 @@
   },
   "license": "MIT",
   "keywords": [
-    "pridepack"
+    "javascript framework",
+    "fontend framework",
+    "gpui",
+    "gpui-ts",
+    "gpui framework",
+    "pridepack",
+    "xstate",
+    "robot3",
+    "state management",
+    "typescript",
+    "reactive",
+    "lit-html",
+    "web framework",
+    "schema-driven",
+    "type-safe",
+    "javascript",
+    "frontend",
+    "solid-events",
+    "crdt",
+    "ui library"
   ],
   "devDependencies": {
     "@types/node": "^22.10.2",
     "jsdom": "^27.0.0",
     "pridepack": "2.6.4",
     "tslib": "^2.8.1",
-    "typescript": "^5.7.2",
+    "typescript": "^5.9.2",
     "vitest": "^2.1.8"
   },
   "scripts": {
+    "release": "standard-version && git push --follow-tags origin main",
     "prepublishOnly": "pridepack clean && pridepack build",
     "build": "pridepack build",
     "type-check": "pridepack check",
@@ -31,21 +51,25 @@
     "test": "vitest --run"
   },
   "private": false,
-  "description": "A JavaScript Framework",
+  "description": "A JavaScript framework inspired by gpui and solid-events",
   "repository": {
-    "url": "",
+    "url": "https://github.com/doeixd/gpui-ts.git",
     "type": "git"
   },
-  "homepage": "",
+  "homepage": "https://github.com/doeixd/gpui-ts",
   "bugs": {
-    "url": ""
+    "url": "https://github.com/doeixd/gpui-ts/issues"
   },
   "author": "Patrick Glenn",
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "lit-html": "^3.3.1"
+    "lit-html": "^3.3.1",
+    "robot3": "^1.2.0",
+    "standard-version": "^9.5.0",
+    "unctx": "^2.4.1",
+    "xstate": "^5.22.0"
   },
   "types": "./dist/types/index.d.ts",
   "main": "./dist/cjs/production/index.js",
