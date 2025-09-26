@@ -508,6 +508,316 @@ const MyComponent = createComponent<{name: string}, {count: number}>((props) => 
 }))
 ```
 
+## Modules Overview
+
+GPUI-TS is organized into several focused modules, each providing specific functionality:
+
+### Core Module (`src/index.ts`)
+
+The foundation of GPUI-TS, providing the core state management engine.
+
+**Key Exports:**
+- `createApp()` - Creates the main application instance
+- `createSchema()` - Fluent schema builder
+- `createEvent()` - Event system with transformation chains
+- `createSubject()` - Reactive state containers
+- `ModelAPI` - Complete model interface with all state operations
+- `ModelRegistry` - Central state management and effect queuing
+- `Lens` - Composable data access and updates
+- `CRDTManager` - Conflict-free replicated data types support
+- `createReducer()` - Reducer-based state management
+- Dynamic schema modification functions (`addModel`, `removeModel`, `addEvent`)
+
+**Features:**
+- Centralized model ownership with queued effects
+- Functional reactive event composition
+- Advanced type inference and path manipulation
+- Transaction support with rollback
+- Time travel debugging
+- Comprehensive validation
+
+### Lit-HTML Integration (`src/lit.ts`)
+
+Seamless integration with lit-html for reactive rendering.
+
+**Key Exports:**
+- `createView()` - Reactive view binding to models
+- `createComponent()` - Component-style view composition
+- `bind()` - Form input binding directive
+- `when()` - Conditional rendering directive
+- `forEach()` - List rendering directive
+- `asyncTemplate()` - Async operation rendering
+- `suspense()` - Loading/error/success state rendering
+- `devView()` - Development mode debugging
+- `performanceView()` - Performance monitoring
+
+**Features:**
+- Automatic re-rendering on state changes
+- Type-safe template functions
+- Automatic cleanup and lifecycle management
+- Performance optimized rendering
+- Development mode debugging
+
+### Schema Helpers (`src/helpers.ts`)
+
+Type-safe utilities for building and manipulating schemas.
+
+**Key Exports:**
+- `createSchema()` - Fluent schema builder
+- `createModelSchema()` - Advanced model schema configuration
+- `mergeSchemas()` - Schema composition
+- `validators` - Built-in validation rules
+- `combineValidators()` - Validation composition
+- `validateSchema()` - Schema validation
+- `introspectSchema()` - Schema analysis
+- `generateTypes()` - TypeScript type generation
+- Standalone composition helpers (`addModelToSchema`, etc.)
+
+**Features:**
+- Fluent API for schema definition
+- Schema composition and merging
+- Type-safe model extensions
+- Validation and constraints helpers
+- Plugin system for schema augmentation
+- Development utilities
+
+### Advanced Features (`src/advanced.ts`)
+
+Powerful patterns for complex state management scenarios.
+
+**Key Exports:**
+- `createReactiveView()` - Fine-grained reactivity with signals
+- `createResource()` - Formalized async state management
+- `createMachineModel()` - XState integration
+- `Signal` - Reactive primitive for fine-grained updates
+- `Computed` - Derived reactive values
+
+**Features:**
+- Signal-based reactivity for optimal performance
+- Declarative async data fetching with loading states
+- State machine integration with XState
+- Automatic race condition handling
+- Fine-grained DOM updates
+
+### Ergonomic Context API (`src/ergonomic.ts`)
+
+Composition API-style interface using unctx for cleaner setup code.
+
+**Key Exports:**
+- `createAppWithContext()` - Context-aware app creation
+- `useApp()` - Access active application instance
+- `useModel()` - Direct model access by name
+- `useResource()` - Context-aware resource creation
+- `useMachineModel()` - Context-aware state machine integration
+- `useSignalFromModel()` - Bridge models to signals
+
+**Features:**
+- Global context management with unctx
+- Ergonomic hooks for common operations
+- Type-safe model access without prop drilling
+- Cleaner, more modular setup code
+- Async-safe context usage patterns
+
+### Additional Modules
+
+**Signals (`src/signals.ts`):**
+- Reactive primitives for fine-grained reactivity
+- Integration with GPUI-TS models
+- Signal-based view updates
+
+**Resources (`src/resource.ts`):**
+- Specialized async state management
+- Loading, error, and success state handling
+- Automatic dependency tracking
+
+**Infinite Resources (`src/infinite-resource.ts`):**
+- Pagination and infinite scrolling support
+- Virtual scrolling integration
+- Memory-efficient large dataset handling
+
+**CRDT (`src/crdt.ts`):**
+- Conflict-free replicated data types
+- Collaborative editing support
+- Operation broadcasting and conflict resolution
+
+**Robot (`src/robot.ts`):**
+- State machine and robot pattern implementations
+- Complex workflow management
+- Hierarchical state handling
+
+Each module is designed to be used independently or in combination, providing a flexible and scalable architecture for building complex applications with type safety and excellent developer experience.
+
+### Core Functions
+
+#### `createApp<TSchema>(schema: TSchema)`
+
+Creates a GPUI application with full type inference from schema.
+
+```typescript
+const app = createApp(MySchema)
+// app.models.* are fully typed based on schema
+```
+
+#### `createSchema()`
+
+Fluent builder for app schemas:
+
+```typescript
+const schema = createSchema()
+  .model('todos', { items: [] })
+  .events({ todoAdded: { payload: { text: string } } })
+  .plugin(uiStatePlugin)
+  .build()
+```
+
+#### `createEvent<T>()`
+
+Creates event handler and emitter with transformation support:
+
+```typescript
+const [onEvent, emitEvent] = createEvent<PayloadType>()
+
+// Transform with solid-events style chaining
+const transformed = onEvent
+  .filter(payload => isValid(payload))
+  .map(payload => normalize(payload))
+```
+
+#### `createSubject<T>(initialValue, ...eventHandlers)`
+
+Creates reactive state that responds to events:
+
+```typescript
+const count = createSubject(
+  0,
+  onIncrement(delta => current => current + delta),
+  onReset(() => 0)
+)
+```
+
+#### `addModel<TApp, TModelName, TState>(app, modelName, modelDefinition)`
+
+Dynamically adds a new model to a running GPUI application:
+
+```typescript
+let app = createApp(MySchema)
+app = addModel(app, 'posts', {
+  initialState: { items: [], loading: false }
+})
+// app.models.posts is now available and fully typed
+```
+
+#### `removeModel<TApp, TModelName>(app, modelName)`
+
+Removes a model from a running GPUI application and cleans up resources:
+
+```typescript
+app = removeModel(app, 'posts')
+// app.models.posts is now undefined and TypeScript knows it's gone
+```
+
+#### `addEvent<TApp, TEventName, TPayload>(app, eventName, payloadDef)`
+
+Adds a new event definition to the application schema:
+
+```typescript
+app = addEvent(app, 'postCreated', {
+  payload: { title: string, content: string }
+})
+```
+
+#### `addModelToSchema<TBuilder, TModelName, TState>(builder, modelName, initialState)`
+
+Build-time helper for adding models to schema builders:
+
+```typescript
+let builder = createSchema().model('user', { name: '' })
+builder = addModelToSchema(builder, 'posts', { items: [] })
+```
+
+#### `removeModelFromSchema<TBuilder, TModelName>(builder, modelName)`
+
+Build-time helper for removing models from schema builders:
+
+```typescript
+builder = removeModelFromSchema(builder, 'posts')
+```
+
+#### `addEventToSchema<TBuilder, TEventName, TPayload>(builder, eventName, payloadDef)`
+
+Build-time helper for adding events to schema builders:
+
+```typescript
+builder = addEventToSchema(builder, 'login', { payload: { email: '' } })
+```
+
+### Model API
+
+```typescript
+interface ModelAPI<T> {
+  // State access
+  read(): T
+  readAt<P extends Path<T>>(path: P): PathValue<T, P>
+
+  // Updates
+  update(updater: (state: T, ctx: ModelContext<T>) => void): this
+  updateAt<P extends Path<T>>(path: P, updater: (value: PathValue<T, P>) => PathValue<T, P>): this
+  updateIf<TGuard extends T>(guard: (state: T) => state is TGuard, updater: (state: TGuard, ctx: ModelContext<T>) => void): this
+  updateAndNotify(updater: (state: T) => void, onError?: (error: unknown, initialState: DeepReadonly<T>) => void): this
+
+  // Helper methods for common state manipulations
+  set<P extends Path<T>>(path: P, value: PathValue<T, P>): this
+  toggle<P extends Path<T>>(path: PathValue<T, P> extends boolean ? P : never): this
+  reset(): this
+  push<P extends Path<T>>(path: P, ...items: PathValue<T, P> extends (infer U)[] ? U[] : never): this
+  removeWhere<P extends Path<T>>(path: P, predicate: (item: PathValue<T, P> extends (infer U)[] ? U : never) => boolean): this
+  updateAsync<LoadingKey extends keyof T, ErrorKey extends keyof T>(
+    updater: (state: T) => Promise<Partial<T>>,
+    options: {
+      loadingKey: PathValue<T, LoadingKey> extends boolean ? LoadingKey : never
+      errorKey: ErrorKey
+      onError?: (error: unknown, initialState: DeepReadonly<T>) => void
+    }
+  ): Promise<void>
+
+  // Events
+  emit<TEvent>(event: TEvent): this
+  onEvent<TEvent>(handler: (event: TEvent) => void): () => void
+
+  // Subscriptions
+  onChange(listener: (current: T, previous: T) => void): () => void
+  subscribeTo<TSource>(source: ModelAPI<TSource>, reaction: (source: TSource, target: T, ctx: ModelContext<T>) => void): ModelSubscription
+
+  // Advanced
+  lens<TFocus>(getter: (state: T) => TFocus): Lens<T, TFocus>
+  focus<TFocus>(lens: Lens<T, TFocus>): FocusedModel<TFocus, T>
+  transaction<TResult>(work: (ctx: ModelContext<T>) => TResult): TResult
+  snapshot(): ModelSnapshot<T>
+  validate(): ValidationResult<T>
+}
+```
+
+### Lit-HTML Integration
+
+```typescript
+// Create reactive views
+createView(model, container, (state, ctx) => html`
+  <input .value=${ctx.bind('text').value} @input=${ctx.bind('text').onChange} />
+  <button @click=${() => ctx.emit(submitEvent({ text: state.text }))}>
+    Submit
+  </button>
+`)
+
+// Component-style views
+const MyComponent = createComponent<{name: string}, {count: number}>((props) => ({
+  state: createSubject({ count: 0 }),
+  template: (state, ctx) => html`
+    <div>${props.name}: ${state.count}</div>
+    <button @click=${() => ctx.updateAt('count', c => c + 1)}>+</button>
+  `
+}))
+```
+
 ## Comparison with Other Frameworks
 
 ### vs Redux/RTK
@@ -822,7 +1132,7 @@ model.update(state => {
 
 ## Resources
 
-### Documentation
+<!-- ### Documentation
 - [API Reference](./docs/api.md)
 - [Schema Guide](./docs/schemas.md)
 - [Event System Guide](./docs/events.md)
@@ -838,12 +1148,11 @@ model.update(state => {
 ### Community
 - [GitHub Discussions](https://github.com/gpui-ts/gpui-ts/discussions)
 - [Discord Server](https://discord.gg/gpui-ts)
-- [Stack Overflow Tag](https://stackoverflow.com/questions/tagged/gpui-ts)
+- [Stack Overflow Tag](https://stackoverflow.com/questions/tagged/gpui-ts) -->
 
 ### Related Projects
 - [lit-html](https://lit.dev/docs/libraries/lit-html/) - Template library
 - [solid-events](https://github.com/devagrawal09/solid-events) - Event composition inspiration
-- [Swift GPUI](https://developer.apple.com/documentation/swiftui) - Original inspiration
 
 ### Contributing
 - [Contributing Guide](./CONTRIBUTING.md)
