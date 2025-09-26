@@ -2855,6 +2855,11 @@ export * from './lit'
 // Re-export resource modules
 export * from './resource'
 export * from './infinite-resource'
+// export * from './advanced'
+export * from './crdt'
+export * from './helpers'
+export * from './signals'
+export * from './robot'
 
 // =============================================================================
 // EXPORTS - PUBLIC API

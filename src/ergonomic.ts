@@ -36,6 +36,7 @@ import {
   MachineModelAPI,
 } from './advanced'; // Import advanced features
 import { AnyStateMachine } from 'xstate';
+import { fromModel } from './signals';
 
 
 // --- TYPE DEFINITIONS ---
@@ -166,6 +167,38 @@ export function useMachineModel<TMachine extends AnyStateMachine>(
   return createMachineModel(app, name, machine);
 }
 
+/**
+ * Ergonomic hook that creates a read-only signal from a GPUI-TS model.
+ *
+ * This is the most convenient way to bridge state from the centralized GPUI-TS
+ * store into the fine-grained signal system. It uses the active application
+ * context to find the model by name.
+ *
+ * @param modelName The name of the model to subscribe to.
+ * @param selector An optional function to select a slice of the model's state.
+ * @returns A read-only signal accessor `() => T`.
+ *
+ * @example
+ * // In a component setup function:
+ * const userName = useSignalFromModel('user', state => state.name);
+ * const counter = useSignalFromModel('counter');
+ *
+ * effect(() => {
+ *   console.log(`${userName()}'s count is ${counter().count}`);
+ * });
+ */
+export function useSignalFromModel<
+  TApp extends GPUIApp<any>,
+  TModelName extends keyof TApp['models'],
+  TState extends TApp['models'][TModelName] extends ModelAPI<infer S> ? S : never,
+  R
+>(
+  modelName: TModelName,
+  selector: (state: TState) => R = (state) => state as unknown as R
+): () => R {
+  const model = useModel<TApp, TModelName>(modelName);
+  return fromModel(model, selector);
+}
 
 // =============================================================================
 // EXAMPLE USAGE

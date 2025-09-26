@@ -139,7 +139,7 @@ export {
   transition,
   reduce,
   invoke,
-  guard,
+  guard as robotsGuard,
   immediate
 };
 export type {
