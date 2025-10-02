@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createApp, createEvent, createSubject } from '../dist/esm/development/index.js'
+import { createApp, createEvent, createSubject, halt } from '../dist/esm/development/index.js'
 
 describe('Event System', () => {
   let app: ReturnType<typeof createApp>
@@ -411,5 +411,319 @@ describe('Event System', () => {
         { type: 'decrement', amount: 2 }
       ])
     })
+  })
+
+  describe('Advanced Event Composition', () => {
+    it('should support complex transformation chains', () => {
+      const [handler, emit] = createEvent<number>()
+
+      let result: any = null
+      const unsubscribe = handler
+        .map((n) => n * 2)
+        .filter((n) => n > 10)
+        .map((n) => `Value: ${n}`)
+        .subscribe((value) => {
+          result = value
+        })
+
+      emit(3) // 3 * 2 = 6, filtered out
+      expect(result).toBe(null)
+
+      emit(6) // 6 * 2 = 12, passes filter, becomes "Value: 12"
+      expect(result).toBe('Value: 12')
+
+      unsubscribe()
+    })
+
+    it('should handle halting in transformation chains', () => {
+      const [handler, emit] = createEvent<number>()
+
+      let callCount = 0
+      const unsubscribe = handler
+        .map((n) => {
+          callCount++
+          return n > 5 ? n : halt() // This should halt
+        })
+        .map((n) => {
+          callCount++
+          return n * 2
+        })
+        .subscribe(() => {
+          callCount++
+        })
+
+      emit(3) // Should be halted, only first transform called
+      expect(callCount).toBe(1)
+
+      emit(7) // Should pass through both transforms + subscribe
+      expect(callCount).toBe(4) // map1 + map2 + subscribe
+
+      unsubscribe()
+    })
+
+
+
+    it('should create and use topics to merge events', () => {
+      const scope = app.events
+
+      const [eventA, emitA] = createEvent<string>()
+      const [eventB, emitB] = createEvent<string>()
+
+      const topic = scope.createTopic(eventA, eventB)
+
+      const received: string[] = []
+      const unsubscribe = topic.subscribe((msg) => received.push(msg))
+
+      emitA('hello from A')
+      emitB('hello from B')
+
+      expect(received).toEqual(['hello from A', 'hello from B'])
+
+      unsubscribe()
+    })
+
+    it('should create partitions to split events', () => {
+      const scope = app.events
+
+      const [sourceEvent, emitSource] = createEvent<number>()
+
+      const [validPartition, invalidPartition] = scope.createPartition(
+        sourceEvent,
+        (n) => n > 0
+      )
+
+      const validValues: number[] = []
+      const invalidValues: number[] = []
+
+      const unsubValid = validPartition.subscribe((n) => validValues.push(n))
+      const unsubInvalid = invalidPartition.subscribe((n) => invalidValues.push(n))
+
+      emitSource(5)
+      emitSource(-2)
+      emitSource(10)
+      emitSource(0)
+
+      expect(validValues).toEqual([5, 10])
+      expect(invalidValues).toEqual([-2, 0])
+
+      unsubValid()
+      unsubInvalid()
+    })
+
+    it('should support state derivation from events using subjects', () => {
+      const [incrementEvent, emitIncrement] = createEvent<number>()
+      const [resetEvent, emitReset] = createEvent()
+
+      const counter = createSubject(0)
+        .on(incrementEvent, (amount) => (current) => current + amount)
+        .on(resetEvent, () => 0)
+
+      expect(counter()).toBe(0)
+
+      emitIncrement(5)
+      expect(counter()).toBe(5)
+
+      emitIncrement(3)
+      expect(counter()).toBe(8)
+
+      emitReset()
+      expect(counter()).toBe(0)
+    })
+
+    it('should support derived subjects', () => {
+      const baseSubject = createSubject(5)
+      const doubledSubject = baseSubject.derive((value) => value * 2)
+      const stringSubject = doubledSubject.derive((value) => `Value: ${value}`)
+
+      expect(stringSubject()).toBe('Value: 10')
+
+      baseSubject.set(8)
+      expect(stringSubject()).toBe('Value: 16')
+    })
+
+    it('should handle optimistic UI patterns', async () => {
+      // Simulate optimistic updates with async confirmation
+      const [userAction, emitAction] = createEvent<{ id: string; optimistic: boolean }>()
+      const [serverConfirm, emitConfirm] = createEvent<{ id: string; success: boolean }>()
+
+      const items = createSubject(['item1', 'item2'])
+        .on(userAction, ({ id, optimistic }) => (current) => {
+          if (optimistic) {
+            return current.filter(item => item !== id) // Optimistic removal
+          }
+          return current
+        })
+        .on(serverConfirm, ({ id, success }) => (current) => {
+          if (!success) {
+            // Revert optimistic change
+            return [...current, id].sort()
+          }
+          return current
+        })
+
+      expect(items()).toEqual(['item1', 'item2'])
+
+      // User initiates deletion optimistically
+      emitAction({ id: 'item1', optimistic: true })
+      expect(items()).toEqual(['item2'])
+
+      // Server confirms success
+      emitConfirm({ id: 'item1', success: true })
+      expect(items()).toEqual(['item2'])
+
+      // Another deletion that fails
+      emitAction({ id: 'item2', optimistic: true })
+      expect(items()).toEqual([])
+
+      emitConfirm({ id: 'item2', success: false })
+      expect(items()).toEqual(['item2'])
+    })
+
+    it('should support fine-grained mutations with subjects', () => {
+      interface TodoItem {
+        id: string
+        text: string
+        completed: boolean
+      }
+
+      interface TodoState {
+        todos: TodoItem[]
+      }
+
+      const [addTodo, emitAddTodo] = createEvent<{ text: string }>()
+      const [toggleTodo, emitToggleTodo] = createEvent<string>()
+      const [deleteTodo, emitDeleteTodo] = createEvent<string>()
+
+      const todoStore = createSubject<TodoState>({ todos: [] })
+        .on(addTodo, ({ text }) => (state) => ({
+          ...state,
+          todos: [...state.todos, { id: Date.now().toString(), text, completed: false }]
+        }))
+        .on(toggleTodo, (id) => (state) => ({
+          ...state,
+          todos: state.todos.map(todo =>
+            todo.id === id ? { ...todo, completed: !todo.completed } : todo
+          )
+        }))
+        .on(deleteTodo, (id) => (state) => ({
+          ...state,
+          todos: state.todos.filter(todo => todo.id !== id)
+        }))
+
+      expect(todoStore().todos).toEqual([])
+
+      emitAddTodo({ text: 'Learn GPUI-TS' })
+      expect(todoStore().todos).toHaveLength(1)
+      expect(todoStore().todos[0].text).toBe('Learn GPUI-TS')
+      expect(todoStore().todos[0].completed).toBe(false)
+
+      const todoId = todoStore().todos[0].id
+
+      emitToggleTodo(todoId)
+      expect(todoStore().todos[0].completed).toBe(true)
+
+      emitDeleteTodo(todoId)
+      expect(todoStore().todos).toEqual([])
+    })
+
+    it('should support event composition for complex UI logic', () => {
+      // Simulate drag and drop logic from Strello example
+      const [onDragStart, emitDragStart] = createEvent<{ itemId: string }>()
+      const [onDragOver, emitDragOver] = createEvent<{ targetId: string; position: 'top' | 'bottom' }>()
+      const [onDrop, emitDrop] = createEvent<{ itemId: string; targetId: string }>()
+
+      // Compose events for valid drops
+      const onValidDrop = onDrop((dropData) => {
+        // In real scenario, check if drop is valid
+        return dropData.itemId !== dropData.targetId ? dropData : undefined
+      })
+
+      // Derive drop zone state
+      const dropZoneState = createSubject<{ accepting: boolean; position?: 'top' | 'bottom' }>({ accepting: false })
+        .on(onDragOver, ({ position }) => ({ accepting: true, position }))
+        .on(onDrop, () => ({ accepting: false }))
+
+      const actions: string[] = []
+      const unsubscribe = onValidDrop.subscribe((data) => {
+        actions.push(`Moved ${data.itemId} to ${data.targetId}`)
+      })
+
+      expect(dropZoneState()).toEqual({ accepting: false })
+
+      emitDragOver({ targetId: 'zone1', position: 'top' })
+      expect(dropZoneState()).toEqual({ accepting: true, position: 'top' })
+
+      emitDrop({ itemId: 'item1', targetId: 'zone1' })
+      expect(actions).toEqual(['Moved item1 to zone1'])
+      expect(dropZoneState()).toEqual({ accepting: false })
+
+      unsubscribe()
+    })
+
+    it('should handle debouncing correctly', async () => {
+      const [event, emit] = createEvent<string>()
+
+      let callCount = 0
+      const unsubscribe = event
+        .debounce(50)
+        .subscribe(() => callCount++)
+
+      emit('a')
+      emit('b')
+      emit('c')
+
+      expect(callCount).toBe(0)
+
+      await new Promise(resolve => setTimeout(resolve, 60))
+      expect(callCount).toBe(1)
+
+      unsubscribe()
+    })
+
+    it('should handle throttling correctly', async () => {
+      const [event, emit] = createEvent<string>()
+
+      let callCount = 0
+      const unsubscribe = event
+        .throttle(50)
+        .subscribe(() => callCount++)
+
+      emit('a')
+      expect(callCount).toBe(1)
+
+      emit('b')
+      emit('c')
+      expect(callCount).toBe(1)
+
+      await new Promise(resolve => setTimeout(resolve, 60))
+
+      emit('d')
+      expect(callCount).toBe(2)
+
+      unsubscribe()
+    })
+
+    it('should support functional reactive programming patterns', () => {
+      // FRP-style event processing
+      const [inputEvent, emitInput] = createEvent<string>()
+
+      const processedInput = inputEvent
+        .map((text) => text.trim())
+        .filter((text) => text.length > 0)
+        .map((text) => text.toUpperCase())
+
+      const results: string[] = []
+      const unsubscribe = processedInput.subscribe((result) => results.push(result))
+
+      emitInput('  hello  ')
+      emitInput('')
+      emitInput('  world  ')
+
+      expect(results).toEqual(['HELLO', 'WORLD'])
+
+      unsubscribe()
+    })
+
+
   })
 })
