@@ -334,7 +334,7 @@ function createReactiveSystem({
  * effect(() => console.log(`User's name is: ${nameSignal()}`));
  */
 export function fromModel<T extends object, R>(
-    model: ModelAPI<T>,
+    model: ModelAPI<T, any, any>,
     selector: (state: T) => R = (state) => state as unknown as R
 ): () => R {
     const initialState = selector(model.read() as T);

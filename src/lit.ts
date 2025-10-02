@@ -139,7 +139,7 @@ function createView<TModel extends object>(
     model,
     
     emit: <TEvent>(event: TEvent) => {
-      model.emit(event)
+      model.emitEvent(event)
     },
     
     on: <TPayload>(event: EventDefinition<any, TPayload> | EventHandler<any, TPayload>) => {
@@ -209,7 +209,7 @@ function createView<TModel extends object>(
   // Create nested context for child views
   const createNestedContext = <TOther extends object>(otherModel: ModelAPI<TOther>): ViewContext<TOther> => ({
     model: otherModel,
-    emit: (event) => otherModel.emit(event),
+    emit: (event) => otherModel.emitEvent(event),
     on: createContext().on,
     update: (updater) => otherModel.update((state, ctx) => { updater(state); ctx.notify() }),
     updateAt: (path, updater) => otherModel.updateAt(path, updater),

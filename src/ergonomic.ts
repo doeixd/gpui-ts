@@ -72,7 +72,7 @@ export function createAppWithContext<TSchema extends AppSchema>(
   const app = createApp(schema);
   // Set the created app instance as the singleton for our context.
   // The `true` flag allows overwriting, which is useful for HMR in development.
-  appContext.set(app, true);
+  appContext.set(app as GPUIApp<any>, true);
   return app;
 }
 

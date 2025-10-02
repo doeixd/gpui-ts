@@ -1,8 +1,7 @@
 // src/infinite-resource.ts
 
-// import { directive, Directive, PartType } from 'lit-html/directive.js';
+import { directive, Directive, PartType } from 'lit-html/directive.js';
 import { createModel, ModelAPI } from './index';
-import { createSubject, Subject } from './signals';
 import { useApp } from './ergonomic';
 import {
   createResource,
@@ -70,23 +69,24 @@ export function createInfiniteResource<T, P>(
     hasReachedEnd: false,
   });
 
-   // 2. Create a model to drive the underlying resource.
-   const pageKeyModel = createModel<P | null>(app, 'pageKey', options.initialPageKey);
-   const hasReachedEndModel = createModel<boolean>(app, 'hasReachedEnd', false);
+    // 2. Create a model to drive the underlying resource.
+    // 2. Create a model to drive the underlying resource.
+     // It is driven by the pageKeyModel. When the key changes, it re-fetches.
+     const pageKeyModel = createModel<{ key: P | null }>(app, `pageKey_${modelName}`, { key: options.initialPageKey });
 
-   // 3. Create the underlying single-page resource.
-   // It is driven by the pageKeyModel. When the key changes, it re-fetches.
-   const [pageResource] = createResource(
-     pageKeyModel,
-     (key, _info) => {
-       // If the key is null, we've reached the end, so we don't fetch.
-       if (key === null) {
-         return Promise.resolve(null as T);
-       }
-       return fetcher(key as P);
-     },
-     { initialValue: options.initialValue }
-   );
+    // 3. Create the underlying single-page resource.
+     // It is driven by the pageKeyModel. When the key changes, it re-fetches.
+     const [pageResource] = createResource(
+       pageKeyModel,
+       (keyObj, _info) => {
+         // If the key is null, we've reached the end, so we don't fetch.
+         if (keyObj.key === null) {
+           return Promise.resolve(null as T);
+         }
+         return fetcher(keyObj.key as P);
+       },
+       { initialValue: options.initialValue }
+     );
 
    // 4. Subscribe to the single-page resource to merge new data.
    let lastSeenPageData: T | null = null;
@@ -94,7 +94,7 @@ export function createInfiniteResource<T, P>(
      // Only proceed if the fetch is complete and successful, and the data is new.
      if (!pageState.loading && pageState.data && pageState.data !== lastSeenPageData) {
        lastSeenPageData = pageState.data;
-       const currentPageKey = pageKeyModel.read();
+        const currentPageKey = pageKeyModel.read().key;
  
        infiniteModel.update((state, ctx) => {
          // Add the new page's data to our list of pages.
@@ -104,46 +104,52 @@ export function createInfiniteResource<T, P>(
          ctx.notify();
        });
 
-       // Check if this was the last page
-       const nextPageKey = options.getNextPageKey(currentPageKey!, pageState.data);
-       if (nextPageKey === null) {
-         // The fetcher indicated this was the last page.
-         infiniteModel.update((state, ctx) => { 
-           state.hasReachedEnd = true; 
-           ctx.notify();
-         });
-         hasReachedEndModel.update((state, ctx) => {
-           state = true;
-           ctx.notify();
-         });
-       }
+        // Check if this was the last page
+        const nextPageKey = options.getNextPageKey(currentPageKey! as P, pageState.data);
+        if (nextPageKey === null) {
+          // The fetcher indicated this was the last page.
+          infiniteModel.update((state, ctx) => {
+            state.hasReachedEnd = true;
+            ctx.notify();
+          });
+        }
      } else if (pageState.error) {
          // Optionally handle errors here, e.g., stop pagination on error
          console.error(`[GPUI-TS] Error fetching page for infinite resource "${modelName}":`, pageState.error);
      }
    });
 
-   // 5. Define the user-facing actions.
-   const actions: InfiniteResourceActions<T> = {
-     fetchNextPage: () => {
-       if (hasReachedEndModel.read() || pageResource.read().loading) {
-         return; // Don't fetch if we're at the end or already fetching.
-       }
-       // Trigger a re-fetch by re-setting the model to its current value.
-       pageKeyModel.update((state, ctx) => {
-         ctx.notify();
-       });
-     },
-     setHasReachedEnd: () => {
-       infiniteModel.update((state, ctx) => { 
-         state.hasReachedEnd = true; 
-         ctx.notify();
-       });
-       hasReachedEndModel.update((state, ctx) => {
-         state = true;
-         ctx.notify();
-       });
-     },
+    // 5. Define the user-facing actions.
+    const actions: InfiniteResourceActions<T> = {
+       fetchNextPage: () => {
+         if (infiniteModel.read().hasReachedEnd || pageResource.read().loading) {
+           return; // Don't fetch if we're at the end or already fetching.
+         }
+
+         const currentState = infiniteModel.read();
+         const lastPage = currentState.pages[currentState.pages.length - 1];
+         const currentPageKey = pageKeyModel.read().key;
+
+         if (lastPage && currentPageKey !== null) {
+           const nextPageKey = options.getNextPageKey(currentPageKey as P, lastPage as T);
+           if (nextPageKey !== null) {
+             pageKeyModel.updateAndNotify((state) => {
+               state.key = nextPageKey;
+             });
+           } else {
+             infiniteModel.update((state, ctx) => {
+               state.hasReachedEnd = true;
+               ctx.notify();
+             });
+           }
+         }
+       },
+      setHasReachedEnd: () => {
+        infiniteModel.update((state, ctx) => {
+          state.hasReachedEnd = true;
+          ctx.notify();
+        });
+      },
      pageResource, // Expose the underlying resource for fine-grained UI control
    };
 
@@ -152,8 +158,7 @@ export function createInfiniteResource<T, P>(
 
 
 // --- UI DIRECTIVE for Infinite Scrolling ---
-// TODO: Fix for lit-html v3 compatibility
-/*
+
 class InfiniteScrollDirective extends Directive {
   private observer?: IntersectionObserver;
   private element?: Element;
@@ -204,6 +209,6 @@ class InfiniteScrollDirective extends Directive {
  *   <div ${infiniteScroll(actions)}>
  *     Loading more items...
  *   </div>
-  * `
-  */
- // export const infiniteScroll = directive(InfiniteScrollDirective);
+ *   *`
+ */
+export const infiniteScroll = directive(InfiniteScrollDirective);
