@@ -1,6 +1,6 @@
 {
   "name": "gpui-ts",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "files": [
     "dist",
     "src"
