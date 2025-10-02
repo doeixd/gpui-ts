@@ -1,6 +1,5 @@
 # The Perils of Reactivity: Notes from an Experiment in Explicit Control with GPUI-TS
 
-*Posted on September 26, 2025 by Patrick Glenn, GPUI-TS Contributor*
 
 Matthew Phillips' ["The Perils of Reactivity"](https://outbox.matthewphillips.info/archive/perils-of-reactivity) lands like a well-timed reality check amid the signal hype. Those of us knee-deep in JS state wrangling know the drill: what starts as a clean reactive graph ends in stale deps, untraceable cascades, and the nagging sense that your app is now a reluctant distributed system. Phillips articulates the why behind the frustration—wrappers obscuring data, debugging black holes, control slipping away, over-renders multiplying—without pulling punches.
 
