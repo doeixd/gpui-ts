@@ -76,3 +76,5 @@ Focus on **predictability**, **type safety**, and **developer ergonomics**. When
 ---
 
 **Ready to contribute?** Start with [AGENTS.md](./AGENTS.md) for the complete guide! 🚀
+
+NEVER ADD YOURSELF As a GIT CO-AUTHOR / CONTRIBUTER
