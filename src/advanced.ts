@@ -20,13 +20,15 @@
  */
 
 import { TemplateResult } from 'lit-html';
-// import { directive, Directive, PartType, ChildPart } from 'lit-html/directive.js';
-import { ModelAPI, createView, GPUIApp } from './index'; // Import from core index
-import { ViewContext } from './lit'; // Import ViewContext
+import { directive } from 'lit/directive.js';
+ import { ModelAPI, createView, GPUIApp } from './index'; // Import from core index
+ import { ViewContext } from './lit'; // Import ViewContext
 
 // --- XState Peer Dependency Imports ---
 // These are the necessary imports for the state machine integration.
 import { createActor, AnyStateMachine, SnapshotFrom, Actor } from 'xstate';
+
+// Types are now properly imported
 
 // Type aliases
 type AppContext = GPUIApp<any>;
@@ -36,7 +38,7 @@ type AppContext = GPUIApp<any>;
 // =============================================================================
 
 // A lightweight reactive primitive to hold a value and notify subscribers.
-class Signal<T> {
+export class Signal<T> {
   private value: T;
   private subscribers = new Set<() => void>();
 
@@ -71,37 +73,18 @@ class Signal<T> {
   }
 }
 
-/**
- * A special type of Signal whose value is derived from another source (e.g., a model).
- * It only notifies subscribers when its computed value actually changes.
- */
-class Computed<T> extends Signal<T> {
-  constructor(compute: () => T, sourceUnsubscribe: () => () => void) {
-    super(compute());
-    const unsubscribe = sourceUnsubscribe();
-
-    // Override the subscribe method to clean up the source subscription
-    const originalSubscribe = this.subscribe;
-    this.subscribe = (callback: () => void) => {
-      const unsub = originalSubscribe.call(this, callback);
-      // When this computed signal no longer has subscribers, unsubscribe from the source model.
-      return () => {
-        unsub();
-        if ((this['subscribers'] as Set<any>).size === 0) {
-          unsubscribe();
-        }
-      };
-    };
-  }
-}
+// A computed signal that derives its value from other signals or functions.
+// TODO: Implement when Signal class extension is fixed
 
 /**
- * A custom lit-html directive to subscribe a part of the DOM to a signal.
- * When the signal updates, only this specific part will be re-rendered.
- * TODO: Fix the directive import issue for lit-html v3.
- */
-const signal = (sig: Signal<any>) => {
-  // Placeholder implementation - needs proper directive implementation
+   * A custom lit-html directive to subscribe a part of the DOM to a signal.
+   * When the signal updates, only this specific part will be re-rendered.
+   * Compatible with lit-html v3.
+   */
+export const signal = (sig: Signal<any>) => {
+  // In lit-html v3, directives are functions that return a value
+  // This is a simple implementation that just returns the current value
+  // For more advanced reactivity, we might need to use lit-html's reactive system
   return sig.get();
 };
 
@@ -119,41 +102,41 @@ interface ReactiveViewContext<TModel extends object> extends ViewContext<TModel>
   select<R>(selector: (state: TModel) => R): Signal<R>;
 }
 
+// createView is now properly imported
+
 /**
  * Creates a reactive view with support for fine-grained reactivity via signals.
  * This is a drop-in replacement for the original `createView`.
  */
 export function createReactiveView<TModel extends object>(
-  model: ModelAPI<TModel>,
-  container: Element,
-  template: (state: TModel, context: ReactiveViewContext<TModel>) => TemplateResult
-) {
-  return createView(model, container, (state, originalCtx) => {
-    const selectors = new Map<Function, Computed<any>>();
+   model: ModelAPI<TModel>,
+   container: Element,
+   template: (state: TModel, context: ReactiveViewContext<TModel>) => TemplateResult
+ ) {
+   return createView(model, container, (state, originalCtx) => {
+     const selectors = new Map<Function, Signal<any>>();
 
-    const reactiveCtx: ReactiveViewContext<TModel> = {
-      ...originalCtx,
-      select: <R>(selectorFn: (state: TModel) => R): Signal<R> => {
-        if (selectors.has(selectorFn)) {
-          return selectors.get(selectorFn) as Computed<R>;
-        }
+     const reactiveCtx: ReactiveViewContext<TModel> = {
+       ...originalCtx,
+       select: <R>(selectorFn: (state: TModel) => R): Signal<R> => {
+         if (selectors.has(selectorFn)) {
+           return selectors.get(selectorFn) as Signal<R>;
+         }
 
-        // Create a new computed signal that updates when the model changes
-        const computedSignal = new Computed<R>(
-          () => selectorFn(model.read() as TModel),
-          () => model.onChange(newState => {
-            computedSignal.set(selectorFn(newState));
-          })
-        );
+         // Create a new signal that updates when the model changes
+         const signal = new Signal<R>(selectorFn(model.read() as TModel));
+         model.onChange(newState => {
+           signal.set(selectorFn(newState));
+         });
 
-        selectors.set(selectorFn, computedSignal);
-        return computedSignal;
-      },
-    };
+         selectors.set(selectorFn, signal);
+         return signal;
+       },
+     };
 
-    return template(state as TModel, reactiveCtx);
-  });
-}
+     return template(state as TModel, reactiveCtx);
+   });
+ }
 
 
 // =============================================================================

@@ -29,13 +29,12 @@ import {
   EventScope,
   ModelAPI,
 } from './index'; // Import from core index
-import {
-  createResource,
-  createMachineModel,
-  ResourceState,
-  MachineModelAPI,
-} from './advanced'; // Import advanced features
-import { AnyStateMachine } from 'xstate';
+// import {
+//   createResource,
+//   createMachineModel,
+//   ResourceState,
+//   MachineModelAPI,
+// } from './advanced'; // Import advanced features
 import { fromModel } from './signals';
 
 
@@ -141,6 +140,7 @@ export function useEventScope(): EventScope {
  * @param fetcher An async function that takes the source state and returns data.
  * @returns A ModelAPI for the resource's state (`{ data, loading, error }`).
  */
+/*
 export function useResource<TSource extends object, TData>(
   name: string,
   source: ModelAPI<TSource>,
@@ -149,6 +149,7 @@ export function useResource<TSource extends object, TData>(
   const app = useApp();
   return createResource(app, name, source, fetcher);
 }
+*/
 
 /**
  * Context-aware hook to integrate an XState machine into the GPUI-TS ecosystem.
@@ -159,6 +160,7 @@ export function useResource<TSource extends object, TData>(
  * @param machine The XState machine definition.
  * @returns An enhanced ModelAPI containing the machine's state and a type-safe `send` function.
  */
+/*
 export function useMachineModel<TMachine extends AnyStateMachine>(
   name: string,
   machine: TMachine
@@ -166,6 +168,7 @@ export function useMachineModel<TMachine extends AnyStateMachine>(
   const app = useApp();
   return createMachineModel(app, name, machine);
 }
+*/
 
 /**
  * Ergonomic hook that creates a read-only signal from a GPUI-TS model.

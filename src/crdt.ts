@@ -240,17 +240,15 @@ export function defineReducers<
 export class CRDTManager {
   readonly replicaId: string;
   private models = new Map<string, { apply: (op: Op) => void }>();
-  private onBroadcastEmitter = new Set<(ops: Op[]) => void>();
-  private _app?: GPUIApp<any>;
-  private sequenceNumbers = new Map<string, number>(); // modelName -> last sequence
-  private appliedOps = new Set<string>(); // opId deduplication
+   private onBroadcastEmitter = new Set<(ops: Op[]) => void>();
+   private sequenceNumbers = new Map<string, number>(); // modelName -> last sequence
+   private appliedOps = new Set<string>(); // opId deduplication
 
   constructor() {
     this.replicaId = `replica_${Math.random().toString(36).substring(2, 9)}`;
   }
 
-  /** @internal Used by `createApp` to link the manager to the app instance. */
-  setApp(_app: GPUIApp<any>) { this._app = _app; }
+
 
   /** @internal Registers a model with the manager to handle its operations. */
   register(modelName: string, apply: (op: Op) => void, onOpGenerated: (cb: (op: Op) => void) => void) {

@@ -2880,10 +2880,13 @@ export {
   createModel,
   getNestedProperty,
   setNestedProperty,
-  
+
   // Reducer system
   createReducer,
   createReducerModel,
+
+  // Classes
+  ModelRegistry,
 
    // Types
    type ModelAPI,
@@ -2904,7 +2907,7 @@ export {
    type GPUIContext,
    type EventScope,
    type DeepReadonly,
-   
+
    // Reducer types
    type Reducer,
    type Action,

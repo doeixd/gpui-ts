@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createApp, createSubject } from '../src/index'
 import { createAppWithContext } from '../src/ergonomic'
-import { createResource, createInfiniteResource } from '../src/resource'
+import { createResource } from '../src/resource'
+import { createInfiniteResource } from '../src/infinite-resource'
 
 describe('Resource System', () => {
   describe('createResource', () => {
@@ -145,31 +146,31 @@ describe('Resource System', () => {
   })
 
   describe('createInfiniteResource', () => {
-    it('should create an infinite resource', async () => {
-      const app = createAppWithContext({
-        models: {
-          test: { initialState: { value: 'test' } }
-        }
-      })
+     it('should create an infinite resource', async () => {
+       const app = createAppWithContext({
+         models: {
+           test: { initialState: { value: 'test' } }
+         }
+       })
 
-      const mockFetcher = vi.fn().mockImplementation((pageKey) => {
-        return Promise.resolve([`item ${pageKey}1`, `item ${pageKey}2`])
-      })
+       const mockFetcher = vi.fn().mockImplementation((pageKey) => {
+         return Promise.resolve([`item ${pageKey}1`, `item ${pageKey}2`])
+       })
 
-      const [infiniteResource, actions] = createInfiniteResource(mockFetcher, {
-        name: 'testInfiniteResource',
-        initialPageKey: 1,
-        getNextPageKey: (prevKey, _data) => prevKey < 3 ? prevKey + 1 : null
-      })
+       const [infiniteResource, actions] = createInfiniteResource(mockFetcher, {
+         name: 'testInfiniteResource',
+         initialPageKey: 1,
+         getNextPageKey: (prevKey, _data) => prevKey < 3 ? prevKey + 1 : null
+       })
 
-      // Wait for initial page to load
-      await new Promise(resolve => setTimeout(resolve, 10))
+        // Wait for initial page to load
+        await new Promise(resolve => setTimeout(resolve, 10))
 
-      const state = infiniteResource.read()
-      expect(state.pages).toHaveLength(1)
-      expect(state.data).toEqual(['item 11', 'item 12'])
-      expect(state.hasReachedEnd).toBe(false)
-    })
+        const state = infiniteResource.read()
+        expect(state.pages).toHaveLength(1)
+        expect(state.data).toEqual(['item 11', 'item 12'])
+        expect(state.hasReachedEnd).toBe(false)
+     })
 
     it('should fetch next page', async () => {
       const app = createAppWithContext({

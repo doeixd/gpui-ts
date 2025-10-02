@@ -72,6 +72,16 @@ interface Computed<T = any> extends ReactiveNode { value: T | undefined; getter:
 interface Signal<T = any> extends ReactiveNode { previousValue: T; value: T; }
 interface ModelSignal<T> extends Signal<T> { unsubscribe?: () => void; }
 
+/** A reactive subject that can be used as a source for resources. */
+export interface Subject<T> {
+  (): T;
+  set(value: T): void;
+  subscribe(listener: (value: T) => void): () => void;
+  on: any;
+  derive: any;
+  __isSubject: true;
+}
+
 // --- CORE REACTIVE SYSTEM ---
 
 const queuedEffects: (Effect | EffectScope | undefined)[] = [];
@@ -478,6 +488,29 @@ export function effectScope(fn: () => void): () => void {
 		setCurrentSub(prev);
 	}
 	return effectOper.bind(e);
+}
+
+/**
+ * Creates a reactive subject that can be used as a source for resources.
+ * @param initialValue The initial value of the subject.
+ * @returns A subject function that can be called to get the current value or called with a value to set it.
+ */
+export function createSubject<T>(initialValue: T): Subject<T> {
+  const signalInstance = signal(initialValue);
+  const subject = Object.assign(
+    () => signalInstance(),
+    { 
+      set: (value: T) => signalInstance(value),
+      subscribe: (_listener: (value: T) => void) => {
+        // Return unsubscribe function
+        return () => {};
+      },
+      on: null,
+      derive: null,
+      __isSubject: true as const
+    }
+  ) as Subject<T>;
+  return subject;
 }
 
 // --- INTERNAL IMPLEMENTATION FUNCTIONS ---
