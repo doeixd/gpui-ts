@@ -21,6 +21,63 @@ import type { AppSchema, ModelSchema, ValidationResult, Path } from './index'
 // =============================================================================
 
 /**
+ * Intermediate builder for models that allows defining events
+ */
+interface ModelBuilder<TSchema extends Partial<AppSchema>, TModelName extends string> {
+  /**
+   * Defines events that are scoped to the current model.
+   * @param events An object where keys are event names and values are functions
+   *               that define the payload shape. e.g., `{ myEvent: (id: string) => ({ id }) }`
+   */
+  events(
+    events: Record<string, (...args: any[]) => any>
+  ): SchemaBuilder<TSchema & {
+    models: TSchema['models'] extends Record<string, any>
+      ? TSchema['models'] & { [K in TModelName]: { initialState: any; events: any } }
+      : { [K in TModelName]: { initialState: any; events: any } }
+  }>
+
+  /**
+   * Defines global events for the application.
+   * @param events An object where keys are event names and values are payload definitions.
+   *               e.g., `{ myEvent: { payload: { id: string } } }`
+   */
+  events<TEvents extends Record<string, { payload: any; for?: string }>>(
+    events: TEvents
+  ): SchemaBuilder<TSchema & { events: TEvents }>
+
+  // Also expose the regular SchemaBuilder methods to allow continuing the chain
+  // without defining events.
+  model<TNextName extends string, TNextState extends object>(
+    name: TNextName,
+    initialState: TNextState
+  ): ModelBuilder<TSchema & { models: { [K in TNextName]: { initialState: TNextState } } }, TNextName>
+
+  modelWithSchema<TNextName extends string, TNextState extends object>(
+    name: TNextName,
+    schema: ModelSchema<TNextState>
+  ): SchemaBuilder<TSchema & {
+    models: TSchema['models'] extends Record<string, any>
+      ? TSchema['models'] & { [K in TNextName]: { initialState: TNextState; schema: ModelSchema<TNextState> } }
+      : { [K in TNextName]: { initialState: TNextState; schema: ModelSchema<TNextState> } }
+  }>
+
+  removeModel<TName extends keyof TSchema['models'] & string>(
+    name: TName
+  ): SchemaBuilder<Partial<AppSchema>>
+
+  extend<TExtension extends Partial<AppSchema>>(
+    extension: TExtension
+  ): SchemaBuilder<MergeSchemas<TSchema, TExtension>>
+
+  plugin<TPlugin extends SchemaPlugin>(
+    plugin: TPlugin
+  ): SchemaBuilder<ApplyPlugin<TSchema, TPlugin>>
+
+  build(): TSchema extends AppSchema ? TSchema : never
+}
+
+/**
  * Fluent schema builder interface
  */
 interface SchemaBuilder<TSchema extends Partial<AppSchema> = {}> {
@@ -28,11 +85,11 @@ interface SchemaBuilder<TSchema extends Partial<AppSchema> = {}> {
   model<TName extends string, TState extends object>(
     name: TName,
     initialState: TState
-  ): SchemaBuilder<TSchema & {
+  ): ModelBuilder<TSchema & {
     models: TSchema['models'] extends Record<string, any>
       ? TSchema['models'] & { [K in TName]: { initialState: TState } }
       : { [K in TName]: { initialState: TState } }
-  }>
+  }, TName>
 
   // Add model with full schema
   modelWithSchema<TName extends string, TState extends object>(
@@ -154,16 +211,56 @@ function createSchema(): SchemaBuilder<{}> {
   
   const builder: SchemaBuilder<any> = {
     model: <TName extends string, TState extends object>(name: TName, initialState: TState) => {
-      const newSchema = {
-        ...currentSchema,
-        models: {
-          ...currentSchema.models,
-          [name]: { initialState }
-        }
+       const newSchema = {
+         ...currentSchema,
+         models: {
+           ...currentSchema.models,
+           [name]: { initialState }
+         },
+         events: currentSchema.events || {}
+       }
+
+       // Return the intermediate ModelBuilder
+       const modelBuilder: ModelBuilder<any, any> = {
+         events: (events: Record<string, any>) => {
+           // Check if it's functions (model events) or payload objects (global events)
+           const firstValue = Object.values(events)[0]
+           if (typeof firstValue === 'function') {
+             // Model events
+             const schemaWithEvents = {
+               ...newSchema,
+               models: {
+                 ...newSchema.models,
+                 [name]: {
+                   ...newSchema.models[name],
+                   events
+                 }
+               }
+             }
+             return createBuilderWithSchema(schemaWithEvents)
+           } else if (firstValue && typeof firstValue === 'object' && 'payload' in firstValue) {
+             // Global events
+             const schemaWithEvents = {
+               ...newSchema,
+               events: { ...(newSchema.events || {}), ...events }
+             }
+             return createBuilderWithSchema(schemaWithEvents)
+           } else {
+             throw new Error('Invalid events format')
+           }
+         },
+         // Re-implement other builder methods to pass through
+         model: (nextName, nextState) => createBuilderWithSchema(newSchema).model(nextName, nextState),
+        modelWithSchema: (nextName, nextSchema) => createBuilderWithSchema(newSchema).modelWithSchema(nextName, nextSchema),
+        removeModel: (nextName) => createBuilderWithSchema(newSchema).removeModel(nextName),
+        extend: (extension) => createBuilderWithSchema(newSchema).extend(extension),
+        plugin: (plugin) => createBuilderWithSchema(newSchema).plugin(plugin),
+        build: () => createBuilderWithSchema(newSchema).build()
       }
-      return createBuilderWithSchema(newSchema)
+
+      return modelBuilder as any
     },
-    
+
     modelWithSchema: <TName extends string, TState extends object>(
       name: TName,
       schema: ModelSchema<TState>
@@ -226,11 +323,51 @@ function createBuilderWithSchema(schema: Partial<AppSchema>): SchemaBuilder<any>
         models: {
           ...schema.models,
           [name]: { initialState }
-        }
+        },
+        events: schema.events || {}
       }
-      return createBuilderWithSchema(newSchema)
+
+      // Return the intermediate ModelBuilder
+      const modelBuilder: ModelBuilder<any, any> = {
+        events: (events: Record<string, any>) => {
+          // Check if it's functions (model events) or payload objects (global events)
+          const firstValue = Object.values(events)[0]
+          if (typeof firstValue === 'function') {
+            // Model events
+            const schemaWithEvents = {
+              ...newSchema,
+              models: {
+                ...newSchema.models,
+                [name]: {
+                  ...newSchema.models[name],
+                  events
+                }
+              }
+            }
+            return createBuilderWithSchema(schemaWithEvents)
+          } else if (firstValue && typeof firstValue === 'object' && 'payload' in firstValue) {
+            // Global events
+            const schemaWithEvents = {
+              ...newSchema,
+              events: { ...(newSchema.events || {}), ...events }
+            }
+            return createBuilderWithSchema(schemaWithEvents)
+          } else {
+            throw new Error('Invalid events format')
+          }
+        },
+        // Re-implement other builder methods to pass through
+        model: (nextName, nextState) => createBuilderWithSchema(newSchema).model(nextName, nextState),
+        modelWithSchema: (nextName, nextSchema) => createBuilderWithSchema(newSchema).modelWithSchema(nextName, nextSchema),
+        removeModel: (nextName) => createBuilderWithSchema(newSchema).removeModel(nextName),
+        extend: (extension) => createBuilderWithSchema(newSchema).extend(extension),
+        plugin: (plugin) => createBuilderWithSchema(newSchema).plugin(plugin),
+        build: () => createBuilderWithSchema(newSchema).build()
+      }
+
+      return modelBuilder as any
     },
-    
+
     modelWithSchema: <TName extends string, TState extends object>(
       name: TName,
       modelSchema: ModelSchema<TState>

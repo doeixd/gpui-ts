@@ -20,9 +20,8 @@
  */
 
 import { TemplateResult } from 'lit-html';
-import { directive } from 'lit/directive.js';
- import { ModelAPI, createView, GPUIApp } from './index'; // Import from core index
- import { ViewContext } from './lit'; // Import ViewContext
+import { ModelAPI, createView, GPUIApp } from './index'; // Import from core index
+import { ViewContext } from './lit'; // Import ViewContext
 
 // --- XState Peer Dependency Imports ---
 // These are the necessary imports for the state machine integration.

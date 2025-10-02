@@ -129,6 +129,32 @@ type PathValue<T, P extends Path<T>> = P extends `${infer K}.${infer Rest}`
     : never
 
 // =============================================================================
+// EVENT SYSTEM TYPE UTILITIES
+// =============================================================================
+
+/**
+ * Infers the payload type from an event creator function, e.g., `(text: string) => ({ text })`
+ */
+type EventPayload<TEventCreator> = TEventCreator extends (...args: infer P) => any ? P : [];
+
+/**
+ * Creates the typed `emit` namespace for model-specific events
+ * Also callable as a function for ad-hoc events: emit({ type: 'foo', ...data })
+ */
+type EmitNamespace<TEvents extends Record<string, any>> = {
+  [K in keyof TEvents & string]: (...args: EventPayload<TEvents[K]>) => void;
+} & (<TEvent>(event: TEvent) => void);
+
+/**
+ * Creates the typed `on` namespace for subscribing to model-specific events
+ */
+type OnNamespace<TEvents extends Record<string, any>> = {
+  [K in keyof TEvents & string]: (
+    handler: (payload: ReturnType<TEvents[K]>) => void
+  ) => () => void; // Returns unsubscribe function
+};
+
+// =============================================================================
 // REDUCER SYSTEM FOR ACTION-BASED STATE MANAGEMENT
 // =============================================================================
 
@@ -253,7 +279,7 @@ function createReducerModel<T extends object, TAction extends Action, TName exte
   name: TName,
   config: ReducerModelConfig<T, TAction>,
   registry: ModelRegistry
-): ModelAPI<T, TName> & { dispatch: (action: TAction) => void } {
+): ModelAPI<T, {}, TName> & { dispatch: (action: TAction) => void } {
   const baseModel = createModelAPI(name, {
     initialState: config.initialState,
     constraints: config.constraints
@@ -293,7 +319,7 @@ function createReducerModel<T extends object, TAction extends Action, TName exte
   }
 
   // Create enhanced model that preserves ModelAPI methods
-  return Object.assign(baseModel, { dispatch }) as ModelAPI<T, TName> & { dispatch: (action: TAction) => void }
+  return Object.assign(baseModel, { dispatch }) as ModelAPI<T, {}, TName> & { dispatch: (action: TAction) => void }
 }
 
 // =============================================================================
@@ -586,8 +612,9 @@ interface ValidationResult<T> {
 /**
  * Comprehensive model schema definition
  */
-interface ModelSchema<T extends object> {
+interface ModelSchema<T extends object, TEvents extends Record<string, any> = {}> {
   initialState: T
+  events?: TEvents
   constraints?: {
     readonly?: (keyof T)[]
     required?: (keyof T)[]
@@ -597,11 +624,11 @@ interface ModelSchema<T extends object> {
     [K in string]: (state: T) => any
   }
   effects?: {
-    [K in string]: (state: T, prev: T, ctx: ModelContext<T>) => void
+    [K in string]: (state: T, prev: T, ctx: ModelContext<T, TEvents>) => void
   }
   middleware?: {
     beforeUpdate?: (state: T, updater: any) => boolean | T
-    afterUpdate?: (state: T, prev: T, ctx: ModelContext<T>) => void
+    afterUpdate?: (state: T, prev: T, ctx: ModelContext<T, TEvents>) => void
   }
   schema?: any
 }
@@ -686,15 +713,15 @@ interface Subject<T> {
  *
  * @template T The model state type.
  */
-interface ModelContext<T extends object> {
+interface ModelContext<T extends object, TEvents extends Record<string, any> = {}> {
   /** Read the current deeply immutable state. */
   read(): DeepReadonly<T>
 
   /** Trigger change notifications to subscribers. */
   notify(): void
 
-  /** Emit an event from this model. */
-  emit<E>(event: E): void
+  /** Namespace for emitting type-safe events from within an update. */
+  readonly emit: EmitNamespace<TEvents>
 
   /** Perform an atomic state update with optional notification control. */
   updateWith(
@@ -723,16 +750,10 @@ interface ModelContext<T extends object> {
    /** Create a focused context for nested state updates. */
    focus<TFocus extends object>(lens: Lens<T, TFocus>): ModelContext<TFocus>
 
-  /** Execute operations in a transaction with automatic rollback on error. */
-  transaction<TResult>(work: () => TResult): TResult
+   /** Execute operations in a transaction with automatic rollback on error. */
+   transaction<TResult>(work: () => TResult): TResult
 
-   // Context methods
-   notify(): void
-   batch(operations: () => void): void
-   effect(effect: (state: T, cleanup: (fn: () => void) => void) => void | (() => void)): void
-   schedule(operation: (state: T) => Promise<void>, options?: { debounce?: number; throttle?: number }): Promise<void>
-
-   /** Schedule async operations with debouncing/throttling and cancellation. */
+    /** Schedule async operations with debouncing/throttling and cancellation. */
   scheduleAsync(
     operation: (state: T) => Promise<Partial<T>>,
     options?: {
@@ -866,11 +887,16 @@ interface ModelDebugInfo<T extends object> {
  * @template T The model state type.
  * @template TName The model name type for type safety.
  */
-interface ModelAPI<T extends object, TName extends string = string> {
+interface ModelAPI<T extends object, TEvents extends Record<string, any> = {}, TName extends string = string> {
   readonly id: ModelId<T>
   readonly name: TName
-  readonly schema: ModelSchema<T>
+  readonly schema: ModelSchema<T, TEvents>
   readonly __state: T
+
+  /** Namespace for emitting type-safe, model-specific events. */
+  readonly emit: EmitNamespace<TEvents>
+  /** Namespace for subscribing to type-safe, model-specific events. */
+  readonly on: OnNamespace<TEvents>
   
   // State access
   read(): DeepReadonly<T>
@@ -903,11 +929,11 @@ interface ModelAPI<T extends object, TName extends string = string> {
   // Conditional updates
   updateIf<TGuard extends T>(
     guard: (state: T) => state is TGuard,
-    updater: (state: TGuard, ctx: ModelContext<T>) => void
+    updater: (state: TGuard, ctx: ModelContext<T, TEvents>) => void
   ): this
   updateWhen(
     condition: (state: T) => boolean,
-    updater: (state: T, ctx: ModelContext<T>) => void
+    updater: (state: T, ctx: ModelContext<T, TEvents>) => void
   ): this
   
    // Lens system
@@ -923,14 +949,15 @@ interface ModelAPI<T extends object, TName extends string = string> {
   ): () => void
   
   // Event integration
-  createEvent<TEventName extends string, TPayload>(
-    eventName: TEventName,
-    defaultPayload: TPayload
-  ): EventDefinition<TEventName, TPayload>
-  emit<TEvent>(event: TEvent): this
-  onEvent<TEvent>(handler: (event: TEvent) => void): () => void
-  
-  // Cross-model relationships
+   createEvent<TEventName extends string, TPayload>(
+     eventName: TEventName,
+     defaultPayload: TPayload
+   ): EventDefinition<TEventName, TPayload>
+
+    emitEvent<TEvent>(event: TEvent): this
+    onEvent<TEvent>(handler: (event: TEvent) => void): () => void
+
+   // Cross-model relationships
   subscribeTo<TSource extends ModelAPI<any, any>>(
     source: TSource,
     reaction: (
@@ -985,6 +1012,19 @@ interface ModelAPI<T extends object, TName extends string = string> {
     path: P,
     predicate: (item: PathValue<T, P> extends (infer U)[] ? U : never) => boolean
   ): this
+
+  /**
+   * Returns a Proxy that allows for direct, ergonomic state mutations.
+   * Changes made to the proxy are automatically translated into safe,
+   * queued updates on the underlying model.
+   *
+   * @returns A proxied, mutable version of the model's state.
+   *
+   * @example
+   * const userProxy = app.models.user.asProxy();
+   * userProxy.profile.name = 'Jane'; // This is a safe update
+   */
+  asProxy(): T
    updateAsync<LoadingKey extends keyof T, ErrorKey extends keyof T>(
      updater: (state: DeepReadonly<T>) => Promise<Partial<T>>,
     options: {
@@ -1013,6 +1053,31 @@ interface EventScope {
     predicate: (value: T) => boolean
   ): [EventHandler<never, T>, EventHandler<never, T>]
   cleanup(): void
+}
+
+// =============================================================================
+// EVENT NAMESPACE HELPERS
+// =============================================================================
+
+function createEmitNamespace<TEvents extends Record<string, any>>(
+  modelName: string,
+  events: TEvents,
+  registry: ModelRegistry
+): EmitNamespace<TEvents> {
+  const emitObj: any = {}
+  for (const eventName in events) {
+    emitObj[eventName] = (...args: any[]) => {
+      const payload = events[eventName](...args)
+      registry.emit(modelName, { type: eventName, payload })
+    }
+  }
+
+  // Make the namespace callable for ad-hoc events
+  const emitFunction = (event: any) => {
+    registry.emit(modelName, event)
+  }
+  Object.assign(emitFunction, emitObj)
+  return emitFunction as any as EmitNamespace<TEvents>
 }
 
 // =============================================================================
@@ -1253,14 +1318,15 @@ class ModelRegistry {
     return structuredClone(state)
   }
 
-  /**
-   * Update model state with queued effects. This operation is atomic.
-   * If the updater throws an error, the state is rolled back.
-   */
-  update<T extends object>(
-    id: string,
-    updater: (model: T, ctx: ModelContext<T>) => void
-  ): void {
+   /**
+    * Update model state with queued effects. This operation is atomic.
+    * If the updater throws an error, the state is rolled back.
+    */
+   update<T extends object>(
+     id: string,
+     updater: (model: T, ctx: ModelContext<T>) => void,
+     events?: Record<string, any>
+   ): void {
     const model = this.models.get(id) as T
     if (!model) return
 
@@ -1268,9 +1334,9 @@ class ModelRegistry {
     const snapshot = structuredClone(model)
 
     try {
-      // 2. Attempt the update.
-      const ctx = this.createContext<T>(id)
-      updater(model, ctx)
+       // 2. Attempt the update.
+       const ctx = this.createContext<T>(id, events)
+       updater(model, ctx)
     } catch (error) {
       // 3. If an error occurs, restore the state from the snapshot.
       this.models.set(id, snapshot)
@@ -1285,23 +1351,20 @@ class ModelRegistry {
     }
   }
 
-  /**
-   * Create model context with all capabilities
-   */
-  createContext<T extends object>(id: string): ModelContext<T> {
-    return {
-      read: () => this.read<T>(id),
-      
-       notify: () => {
-         this.effectQueue.push({ type: 'notify', modelId: id })
-       },
-      
-        emit: <E>(event: E) => {
-          this.effectQueue.push({ type: 'emit', modelId: id, event })
-          if (!this.flushingEffects) {
-            this.flushEffects()
-          }
+   /**
+    * Create model context with all capabilities
+    */
+   createContext<T extends object, TEvents extends Record<string, any> = {}>(id: string, events?: TEvents): ModelContext<T, TEvents> {
+     const emitNamespace = events ? createEmitNamespace(id, events, this) : ({} as EmitNamespace<TEvents>)
+
+     return {
+       read: () => this.read<T>(id),
+
+        notify: () => {
+          this.effectQueue.push({ type: 'notify', modelId: id })
         },
+
+        emit: emitNamespace,
       
         updateWith: (
           updater: (state: T) => T,
@@ -1956,11 +2019,11 @@ function defineModel<T extends object>(name: string) {
  * @param registry The ModelRegistry instance.
  * @returns A ModelAPI instance.
  */
-function createModelAPI<T extends object, TName extends string>(
+function createModelAPI<T extends object, TEvents extends Record<string, any> = {}, TName extends string = string>(
   name: TName,
-  schema: ModelSchema<T>,
+  schema: ModelSchema<T, TEvents>,
   registry: ModelRegistry
-): ModelAPI<T, TName> {
+): ModelAPI<T, TEvents, TName> {
   const id = name as unknown as ModelId<T>
   const { initialState, constraints, computed: _computed, effects: _effects, middleware: _middleware } = schema
   
@@ -1969,6 +2032,8 @@ function createModelAPI<T extends object, TName extends string>(
   const subscribers = new Set<(current: T, previous: T) => void>()
   const computedCache = new Map<string, { value: any; dirty: boolean }>()
   const snapshots: ModelSnapshot<T>[] = []
+  const modelProxyCache = new Map<string, any>() // Per-model proxy cache
+  let rootProxy: T | undefined = undefined // Cache for the root proxy
   
 
   
@@ -2012,12 +2077,13 @@ function createModelAPI<T extends object, TName extends string>(
       if (cached && !cached.dirty) {
         return cached.value
       }
-      
-      const newValue = computation(currentState)
+
+      const actualState = registry.read<T>(name) as T
+      const newValue = computation(actualState)
       computedCache.set(computeName, { value: newValue, dirty: false })
       return newValue
     }) as ComputedProperty<TResult>
-    
+
     Object.assign(computedProp, {
       isComputed: true as const,
       invalidate: () => {
@@ -2026,16 +2092,50 @@ function createModelAPI<T extends object, TName extends string>(
       },
       dependencies: [name]
     })
-    
+
     return computedProp
   }
   
+  // Build typed emit and on namespaces
+  const emitNamespaceObj = {} as Record<string, any>
+  const onNamespace = {} as OnNamespace<TEvents>
+  const eventCreators = schema.events || {}
+
+  for (const eventName in eventCreators) {
+    const fullName = `${name}:${eventName}` // Create a unique internal name
+
+    // Build the emit method
+    emitNamespaceObj[eventName] = (...args: any[]) => {
+      const payload = (eventCreators as any)[eventName](...args)
+      registry.emit(name, { type: fullName, payload })
+    }
+
+    // Build the on method
+    ;(onNamespace as any)[eventName] = (handler: (payload: any) => void) => {
+      return registry.onEvent(name, (event: any) => {
+        if (event.type === fullName) {
+          handler(event.payload)
+        }
+      })
+    }
+  }
+
+  // Make emit namespace callable for ad-hoc events
+  const emitFunction = (event: any) => {
+    registry.emit(name, event)
+  }
+  Object.assign(emitFunction, emitNamespaceObj)
+  const emitNamespace = emitFunction as any as EmitNamespace<TEvents>
+
   // Main API implementation
-  const api: ModelAPI<T, TName> = {
+  const api: ModelAPI<T, TEvents, TName> = {
     id,
     name,
     schema,
     __state: undefined as any,
+emit: emitNamespace,
+on: onNamespace,
+ emitEvent: (event) => { registry.emit(name, event); return api },
     
     read: () => registry.read(name),
     
@@ -2043,8 +2143,13 @@ function createModelAPI<T extends object, TName extends string>(
       return getNestedProperty(currentState, path as string) as PathValue<T, P>
     },
     
-    update: function(updater: (state: T, ctx: ModelContext<T>) => void) {
-      registry.update<T>(name, (state, ctx) => {
+    update: function(updater: (state: T, ctx: ModelContext<T, TEvents>) => void) {
+      registry.update<T>(name, (state, baseCtx) => {
+        // Create enhanced context with emit namespace
+        const ctx = {
+          ...(baseCtx as any),
+          emit: emitNamespace
+        } as ModelContext<T, TEvents>
         // Check readonly constraints
         if (constraints?.readonly) {
              const originalState = structuredClone(state) as T
@@ -2059,21 +2164,9 @@ function createModelAPI<T extends object, TName extends string>(
           updater(state, ctx)
         }
       })
-       // Sync local state
-       currentState = registry.read(name) as T
-      // Invalidate computed cache
-      computedCache.forEach((cached) => {
-        cached.dirty = true
-      })
-      // Check required constraints
-      if (constraints?.required) {
-        const state = currentState
-        for (const field of constraints.required) {
-          if (!(field in state) || state[field as keyof T] === undefined || state[field as keyof T] === null) {
-            throw new Error(`Required field '${String(field)}' is missing or null`)
-          }
-        }
-      }
+      // Invalidate all computed properties after update
+      computedCache.forEach(cached => { cached.dirty = true })
+      currentState = registry.read<T>(name) as T
       return this
     },
     
@@ -2207,22 +2300,22 @@ function createModelAPI<T extends object, TName extends string>(
 
     updateIf: function<TGuard extends T>(
       guard: (state: T) => state is TGuard,
-      updater: (state: TGuard, ctx: ModelContext<T>) => void
+      updater: (state: TGuard, ctx: ModelContext<T, TEvents>) => void
     ) {
       return this.update((state, ctx) => {
         if (guard(state)) {
-          updater(state, ctx)
+          updater(state, ctx as ModelContext<T, TEvents>)
         }
       })
     },
-    
+
     updateWhen: function(
       condition: (state: T) => boolean,
-      updater: (state: T, ctx: ModelContext<T>) => void
+      updater: (state: T, ctx: ModelContext<T, TEvents>) => void
     ) {
       return this.update((state, ctx) => {
         if (condition(state)) {
-          updater(state, ctx)
+          updater(state, ctx as ModelContext<T, TEvents>)
         }
       })
     },
@@ -2250,8 +2343,12 @@ function createModelAPI<T extends object, TName extends string>(
       )
     },
 
-     transaction: function<TResult>(work: (ctx: ModelContext<T>) => TResult) {
-      const ctx = registry.createContext<T>(name)
+     transaction: function<TResult>(work: (ctx: ModelContext<T, TEvents>) => TResult) {
+       const baseCtx = registry.createContext<T>(name)
+       const ctx: ModelContext<T, TEvents> = {
+         ...baseCtx,
+         emit: emitNamespace
+       }
        const snapshot = structuredClone(registry.read<T>(name) as T)
       try {
         const result = work(ctx)
@@ -2304,10 +2401,10 @@ function createModelAPI<T extends object, TName extends string>(
           focus: <TNext extends object>(nextLens: Lens<TFocus, TNext>) =>
             api.focus(targetLens.compose(nextLens)),
 
-         root: () => api,
+          root: () => api as any,
 
           notify: () => api.notify(),
-          emit: (event: any) => api.emit(event),
+           emit: (event: any) => (api.emit as any)(event),
             updateWith: (updater: (state: TFocus) => TFocus) => {
               let newFocus: TFocus | undefined
               api.updateWith((root) => {
@@ -2358,29 +2455,28 @@ function createModelAPI<T extends object, TName extends string>(
       })
 
       return event
-    },
-    
-    emit: function<TEvent>(event: TEvent) {
-      registry.emit(name, event)
-      return this
-    },
-    
-     onEvent: function<TEvent>(handler: (event: TEvent) => void) {
+     },
+
+      onEvent: function<TEvent>(handler: (event: TEvent) => void) {
       return registry.onEvent(name, handler)
     },
     
-     subscribeTo: function<TSource extends ModelAPI<any, any>>(
-      source: TSource,
-      reaction: (source: TSource['__state'], target: T, ctx: ModelContext<T>) => void
-    ) {
-      const subscription = registry.subscribe(
-        source.name,
-        (sourceState) => {
-          const targetState = registry.read<T>(name) as T
-          const ctx = registry.createContext<T>(name)
-          reaction(sourceState as TSource['__state'], targetState, ctx)
-        }
-      )
+      subscribeTo: function<TSource extends ModelAPI<any, any>>(
+       source: TSource,
+       reaction: (source: TSource['__state'], target: T, ctx: ModelContext<T, TEvents>) => void
+     ) {
+       const subscription = registry.subscribe(
+         source.name,
+         (sourceState) => {
+           const targetState = registry.read<T>(name) as T
+           const baseCtx = registry.createContext<T>(name)
+           const ctx: ModelContext<T, TEvents> = {
+             ...baseCtx,
+             emit: emitNamespace
+           }
+           reaction(sourceState as TSource['__state'], targetState, ctx)
+         }
+       )
 
       return {
         id: `${source.name}->${name}`,
@@ -2399,21 +2495,29 @@ function createModelAPI<T extends object, TName extends string>(
     validate,
     
      snapshot: function() {
+      const actualState = registry.read<T>(name) as T
       return {
         timestamp: new Date(),
-        state: structuredClone(currentState),
+        state: structuredClone(actualState),
         metadata: {
           version: snapshots.length + 1,
-          checksum: generateChecksum(currentState)
+          checksum: generateChecksum(actualState)
         }
       }
     },
     
     restore: function(snapshot: ModelSnapshot<T>) {
-      registry.update(name, (state) => {
+      this.updateAndNotify((state) => {
+        // Clear existing properties
+        for (const key in state) {
+          delete (state as any)[key]
+        }
+        // Assign snapshot properties
         Object.assign(state as any, snapshot.state)
       })
       currentState = registry.read<T>(name) as T
+      // Invalidate computed cache after restore
+      computedCache.forEach(cached => { cached.dirty = true })
       return this
     },
     
@@ -2456,13 +2560,22 @@ function createModelAPI<T extends object, TName extends string>(
         registry.createContext<T>(name).effect(effect)
       },
 
-       schedule: function(operation: (state: T) => Promise<void>, options?: { debounce?: number; throttle?: number }) {
-        return registry.createContext<T>(name).schedule(operation, options)
-      }
-   }
+        schedule: function(operation: (state: T) => Promise<void>, options?: { debounce?: number; throttle?: number }) {
+         return registry.createContext<T>(name).schedule(operation, options)
+       },
 
-   return api
-}
+       asProxy: function() {
+         if (!rootProxy) {
+           // Create and cache the root proxy on first call
+           rootProxy = createModelProxy(this as ModelAPI<T, TEvents>, modelProxyCache);
+         }
+         return rootProxy!;
+       }
+
+      }
+
+      return api;
+ }
 
 // =============================================================================
 // IMPLEMENTATION: EVENT SCOPE
@@ -2529,6 +2642,7 @@ type GPUIApp<TSchema extends AppSchema> = {
   models: {
     [K in keyof TSchema['models']]: ModelAPI<
       TSchema['models'][K]['initialState'],
+      TSchema['models'][K]['events'] extends Record<string, any> ? TSchema['models'][K]['events'] : {},
       K & string
     >
   }
@@ -2735,7 +2849,11 @@ function addEvent<
   eventName: TEventName,
   payloadDef: { payload: TPayload }
 ): GPUIApp<
-  TApp['_schema'] & { events: { [K in TEventName]: { payload: TPayload } } }
+  TApp['_schema'] & {
+    events: TApp['_schema']['events'] extends Record<string, any>
+      ? TApp['_schema']['events'] & { [K in TEventName]: { payload: TPayload } }
+      : { [K in TEventName]: { payload: TPayload } }
+  }
 > {
   if (app._schema.events && eventName in app._schema.events) {
     throw new Error(`[GPUI-TS] Event with name "${eventName}" already exists.`)
@@ -2771,6 +2889,7 @@ function addEvent<
  * @returns The value at the specified path, or undefined if not found.
  */
 function getNestedProperty(obj: any, path: string): any {
+  if (path === '') return obj
   return path.split('.').reduce((current, key) => current?.[key], obj)
 }
 
@@ -2800,6 +2919,107 @@ function setNestedProperty(obj: any, path: string, value: any): void {
  */
 function generateChecksum(obj: any): string {
   return btoa(JSON.stringify(obj)).slice(0, 8)
+}
+
+/**
+ * Cache for proxy objects to avoid creating new proxies for the same paths.
+ * NOTE: This cache is per-model, stored in the rootProxy cache within createModelAPI
+ */
+// Removed global proxyCache - each model now has its own cache
+
+/**
+ * Creates a recursive proxy for a model that allows direct, ergonomic state mutations.
+ * The proxy intercepts property access and assignment, translating them into safe model updates.
+ *
+ * @template T The model state type.
+ * @param model The ModelAPI instance.
+ * @param proxyCache The cache map for this model's proxies.
+ * @param path The current path in the object hierarchy (relative to model state).
+ * @returns A proxied version of the model's state.
+ */
+function createModelProxy<T extends object>(model: ModelAPI<T, any, any>, proxyCache: Map<string, any>, path: string[] = []): T {
+  const pathKey = path.length > 0 ? path.join('.') : 'root';
+
+  // Return cached proxy if it exists for this path
+  if (proxyCache.has(pathKey)) {
+    return proxyCache.get(pathKey);
+  }
+
+  // Use a dummy target; we'll override all access to use current state
+  const target = {};
+
+  const handler: ProxyHandler<object> = {
+    get(target, prop, receiver) {
+      if (typeof prop === 'symbol') {
+        return Reflect.get(target, prop, receiver);
+      }
+
+      const fullPath = [...path, prop].join('.');
+      const current = getNestedProperty(model.read(), fullPath);
+
+      // Special handling for array mutation methods
+      if (Array.isArray(current) && ['push', 'pop', 'splice', 'shift', 'unshift'].includes(prop as string)) {
+        return (...args: any[]) => {
+          const currentArray = [...current];
+          const result = (currentArray as any)[prop](...args);
+          model.set(fullPath as Path<T>, currentArray as any);
+          return result;
+        };
+      }
+
+      // If the property is a nested object/array, return a proxy for it
+      if (typeof current === 'object' && current !== null) {
+        return createModelProxy(model, proxyCache, [...path, prop]);
+      }
+
+      return current;
+    },
+
+    set(target, prop, value, receiver) {
+      if (typeof prop === 'symbol') {
+        return Reflect.set(target, prop, value, receiver);
+      }
+
+      const fullPath = [...path, prop].join('.');
+      model.set(fullPath as Path<T>, value);
+      return true;
+    },
+
+    deleteProperty(target, prop) {
+      if (typeof prop === 'symbol') {
+        return Reflect.deleteProperty(target, prop);
+      }
+
+      model.updateAndNotify(state => {
+        const parentPath = path.join('.');
+        const parent = parentPath ? getNestedProperty(state, parentPath) : state;
+        if (parent && typeof parent === 'object') {
+          delete (parent as any)[prop];
+        }
+      });
+      return true;
+    },
+
+    ownKeys(_target) {
+      const current = getNestedProperty(model.read(), path.join('.'));
+      if (typeof current === 'object' && current !== null) {
+        return Reflect.ownKeys(current);
+      }
+      return [];
+    },
+
+    getOwnPropertyDescriptor(_target, prop) {
+      const current = getNestedProperty(model.read(), path.join('.'));
+      if (typeof current === 'object' && current !== null) {
+        return Reflect.getOwnPropertyDescriptor(current, prop);
+      }
+      return undefined;
+    }
+  };
+
+  const proxy = new Proxy(target, handler);
+  proxyCache.set(pathKey, proxy);
+  return proxy as T;
 }
 
 // =============================================================================
@@ -2860,6 +3080,7 @@ export * from './crdt'
 export * from './helpers'
 export * from './signals'
 export * from './robot'
+export * from './selectors'
 
 // =============================================================================
 // EXPORTS - PUBLIC API
