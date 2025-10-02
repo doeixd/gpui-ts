@@ -150,6 +150,7 @@ Follow these steps to ensure contributions are safe and correct.
 
 -   **DO NOT** add logic that mutates state outside of an `update` function's callback.
 -   **DO NOT** bypass the queued effect system. Avoid calling listeners or subscribers directly. All side effects should be triggered by the `flushEffects` loop.
+-   **DO NOT** use `model.update()` when you need reactive subscriptions to trigger. Use `model.updateAndNotify()` instead to ensure subscribers are notified of state changes.
 -   **DO NOT** introduce new, third-party rendering libraries. The focus is on a deep and stable integration with `lit-html`.
 -   **DO NOT** break the type system. Avoid using `any` unless absolutely necessary and justified. The goal is maximum type safety.
 -   **DO NOT** modify the build configuration (`pridepack.json`, `tsconfig.json`) without a clear and compelling reason.
@@ -164,6 +165,7 @@ Follow these steps to ensure contributions are safe and correct.
 - we want maximum type saftey / inference / ergonomics / dx, dont be scared of advanced features.
 - everything exported should have comprehensive doc comments!
 - keep files small, and focused on a single responsibility
+- **CRITICAL**: When updating models that drive reactive subscriptions (like resources), use `updateAndNotify()` instead of `update()` to ensure subscribers are notified of changes
 
 ### After any significant task
 - Create a document in the docs/AGENT_SUMMARIES folder
