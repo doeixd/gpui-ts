@@ -36,11 +36,11 @@ describe('Schema Builder API', () => {
 
     it('should create schema with events', () => {
       const schema = createSchema()
-        .model('user', { name: '' })
         .events({
           login: { payload: { email: '', password: '' } },
           logout: { payload: {} }
         })
+        .model('user', { name: '' })
         .build()
 
       expect(schema.events?.login.payload).toEqual({ email: '', password: '' })
@@ -233,9 +233,9 @@ describe('Schema Builder API', () => {
   describe('introspectSchema', () => {
     it('should provide basic schema information', () => {
       const schema = createSchema()
+        .events({ increment: { payload: {} } })
         .model('user', { name: '' })
         .model('counter', { count: 0 })
-        .events({ increment: { payload: {} } })
         .build()
 
       const info = introspectSchema(schema)
@@ -293,10 +293,10 @@ describe('Schema Builder API', () => {
 
     it('should generate types for events', () => {
       const schema = createSchema()
-        .model('user', { name: '' })
         .events({
           login: { payload: { email: '', password: '' } }
         })
+        .model('user', { name: '' })
         .build()
 
       const types = generateTypes(schema)

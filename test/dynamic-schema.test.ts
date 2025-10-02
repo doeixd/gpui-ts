@@ -135,8 +135,8 @@ describe('Dynamic Schema Management - Runtime', () => {
 
     it('should throw error when adding existing event', () => {
       const appWithEvents = createApp(createSchema()
-        .model('user', { name: '' })
         .events({ login: { payload: { email: '' } } })
+        .model('user', { name: '' })
         .build()
       )
 
@@ -147,8 +147,8 @@ describe('Dynamic Schema Management - Runtime', () => {
 
     it('should maintain existing events', () => {
       const appWithEvents = createApp(createSchema()
-        .model('user', { name: '' })
         .events({ logout: { payload: {} } })
+        .model('user', { name: '' })
         .build()
       )
 

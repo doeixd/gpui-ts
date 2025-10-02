@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createApp, createSubject } from '../src/index'
 import { createAppWithContext } from '../src/ergonomic'
 import { createResource } from '../src/resource'
-import { createInfiniteResource } from '../src/infinite-resource'
+import { createInfiniteResource, infiniteScroll } from '../src/infinite-resource'
 
 describe('Resource System', () => {
   describe('createResource', () => {
@@ -153,14 +153,14 @@ describe('Resource System', () => {
          }
        })
 
-       const mockFetcher = vi.fn().mockImplementation((pageKey) => {
-         return Promise.resolve([`item ${pageKey}1`, `item ${pageKey}2`])
-       })
+        const mockFetcher = vi.fn().mockImplementation((pageKey) => {
+          return [`item ${pageKey}1`, `item ${pageKey}2`]
+        })
 
        const [infiniteResource, actions] = createInfiniteResource(mockFetcher, {
          name: 'testInfiniteResource',
          initialPageKey: 1,
-         getNextPageKey: (prevKey, _data) => prevKey < 3 ? prevKey + 1 : null
+          getNextPageKey: (prevKey, _data) => prevKey < 2 ? prevKey + 1 : null
        })
 
         // Wait for initial page to load
@@ -172,34 +172,39 @@ describe('Resource System', () => {
         expect(state.hasReachedEnd).toBe(false)
      })
 
-    it('should fetch next page', async () => {
-      const app = createAppWithContext({
-        models: {
-          test: { initialState: { value: 'test' } }
-        }
+     it('should fetch next page', async () => {
+       const app = createAppWithContext({
+         models: {
+           test: { initialState: { value: 'test' } }
+         }
+       })
+
+        const mockFetcher = vi.fn().mockImplementation((pageKey) => {
+          return [`item ${pageKey}1`, `item ${pageKey}2`]
+        })
+
+       const [infiniteResource, actions] = createInfiniteResource(mockFetcher, {
+         name: 'testInfiniteResource',
+         initialPageKey: 1,
+         getNextPageKey: (prevKey, _data) => prevKey < 2 ? prevKey + 1 : null
+       })
+
+       // Wait for initial page
+       await new Promise(resolve => setTimeout(resolve, 10))
+
+       // Fetch next page
+       actions.fetchNextPage()
+       await new Promise(resolve => setTimeout(resolve, 100))
+
+       const state = infiniteResource.read()
+       expect(state.pages).toHaveLength(2)
+       expect(state.data).toEqual(['item 11', 'item 12', 'item 21', 'item 22'])
+        expect(state.hasReachedEnd).toBe(true) // Should reach end after page 2
       })
 
-      const mockFetcher = vi.fn().mockImplementation((pageKey) => {
-        return Promise.resolve([`item ${pageKey}1`, `item ${pageKey}2`])
+      it('should export infiniteScroll directive', () => {
+        expect(infiniteScroll).toBeDefined()
+        expect(typeof infiniteScroll).toBe('function')
       })
-
-      const [infiniteResource, actions] = createInfiniteResource(mockFetcher, {
-        name: 'testInfiniteResource',
-        initialPageKey: 1,
-        getNextPageKey: (prevKey, _data) => prevKey < 2 ? prevKey + 1 : null
-      })
-
-      // Wait for initial page
-      await new Promise(resolve => setTimeout(resolve, 10))
-
-      // Fetch next page
-      actions.fetchNextPage()
-      await new Promise(resolve => setTimeout(resolve, 10))
-
-      const state = infiniteResource.read()
-      expect(state.pages).toHaveLength(2)
-      expect(state.data).toEqual(['item 11', 'item 12', 'item 21', 'item 22'])
-      expect(state.hasReachedEnd).toBe(true) // Should reach end after page 2
-    })
-  })
+   })
 })

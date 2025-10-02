@@ -476,4 +476,155 @@ describe('GPUI-TS Test Suite', () => {
       expect(app.models.user.read().settings.theme).toBe('dark') // unchanged
     })
   })
+
+  describe('Proxy API', () => {
+    it('should create a proxy for direct state mutations', () => {
+      const app = createApp({
+        models: {
+          counter: {
+            initialState: { count: 0 }
+          }
+        }
+      })
+
+      const counterProxy = app.models.counter.asProxy()
+
+      // Direct assignment should work
+      counterProxy.count = 5
+
+      expect(app.models.counter.read().count).toBe(5)
+    })
+
+    it('should support nested object updates', () => {
+      const app = createApp({
+        models: {
+          user: {
+            initialState: {
+              profile: {
+                name: 'John',
+                settings: { theme: 'dark' }
+              }
+            }
+          }
+        }
+      })
+
+      const userProxy = app.models.user.asProxy()
+
+      // Deep nested assignment
+      userProxy.profile.name = 'Jane'
+      userProxy.profile.settings.theme = 'light'
+
+      const state = app.models.user.read()
+      expect(state.profile.name).toBe('Jane')
+      expect(state.profile.settings.theme).toBe('light')
+    })
+
+    it('should support array operations', () => {
+      const app = createApp({
+        models: {
+          todos: {
+            initialState: {
+              items: [{ id: 1, text: 'Learn GPUI', completed: false }]
+            }
+          }
+        }
+      })
+
+      const todosProxy = app.models.todos.asProxy()
+
+      // Use array methods
+      todosProxy.items.push({ id: 2, text: 'Write tests', completed: false })
+
+      const state = app.models.todos.read()
+      expect(state.items).toHaveLength(2)
+      expect(state.items[1].text).toBe('Write tests')
+    })
+
+    it('should trigger change notifications', () => {
+      const app = createApp({
+        models: {
+          counter: {
+            initialState: { count: 0 }
+          }
+        }
+      })
+
+      let notifiedValue = 0
+      app.models.counter.onChange((current) => {
+        notifiedValue = current.count
+      })
+
+      const counterProxy = app.models.counter.asProxy()
+      counterProxy.count = 10
+
+      expect(notifiedValue).toBe(10)
+    })
+
+    it('should cache proxy instances', () => {
+      const app = createApp({
+        models: {
+          user: {
+            initialState: {
+              profile: { name: 'John' }
+            }
+          }
+        }
+      })
+
+      const userProxy1 = app.models.user.asProxy()
+      const userProxy2 = app.models.user.asProxy()
+
+      // Should return the same proxy instance
+      expect(userProxy1).toBe(userProxy2)
+
+      // Nested proxies should also be cached
+      const profileProxy1 = userProxy1.profile
+      const profileProxy2 = userProxy2.profile
+      expect(profileProxy1).toBe(profileProxy2)
+    })
+
+    it('should work with mixed API usage', () => {
+      const app = createApp({
+        models: {
+          counter: {
+            initialState: { count: 0 }
+          }
+        }
+      })
+
+      const counterProxy = app.models.counter.asProxy()
+
+      // Mix proxy and explicit API
+      counterProxy.count = 5
+      app.models.counter.update((state) => { state.count *= 2 })
+
+      expect(app.models.counter.read().count).toBe(10)
+    })
+
+    it('should handle primitive values correctly', () => {
+      const app = createApp({
+        models: {
+          config: {
+            initialState: {
+              enabled: true,
+              count: 0,
+              name: 'test'
+            }
+          }
+        }
+      })
+
+      const configProxy = app.models.config.asProxy()
+
+      configProxy.enabled = false
+      configProxy.count = 42
+      configProxy.name = 'updated'
+
+      const state = app.models.config.read()
+      expect(state.enabled).toBe(false)
+      expect(state.count).toBe(42)
+      expect(state.name).toBe('updated')
+    })
+  })
 })
