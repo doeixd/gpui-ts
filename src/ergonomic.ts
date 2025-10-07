@@ -28,6 +28,8 @@ import {
   createApp,
   EventScope,
   ModelAPI,
+  createSubject, 
+  Subject
 } from './index'; // Import from core index
 // import {
 //   createResource,
@@ -36,6 +38,7 @@ import {
 //   MachineModelAPI,
 // } from './advanced'; // Import advanced features
 import { fromModel } from './signals';
+import { createResource, ResourceReturn } from './resource';
 
 
 // --- TYPE DEFINITIONS ---
@@ -279,3 +282,242 @@ console.log('Application setup complete!');
 // Now you can use `app`, `userResource`, and `toggleModel` to build your UI.
 
 */
+
+
+// Helper type to extract the state type from a Model or Subject
+type StateFrom<T> = T extends ModelAPI<infer S> | Subject<infer S> ? S : never;
+
+// Helper type to create a tuple of state types from a tuple of sources
+type StatesFrom<T extends readonly any[]> = {
+  [K in keyof T]: StateFrom<T[K]>
+};
+
+/**
+ * Creates a single, unified Subject that is reactively derived from multiple
+ * GPUI-TS Models or other Subjects. This is a powerful ergonomic helper for
+ * preparing a view's complete state from various sources.
+ *
+ * It automatically subscribes to all sources and unsubscribes when the
+ * returned `destroy` function is called, preventing memory leaks.
+ *
+ * @param sources An array of reactive sources (ModelAPI or Subject instances).
+ * @param combiner A function that receives the latest state from each source
+ *                 (in the same order) and returns the combined view state object.
+ * @returns An object containing the derived `subject` and a `destroy` function
+ *          for cleanup.
+ */
+export function createViewSubject<
+  const TSources extends readonly (ModelAPI<any> | Subject<any>)[],
+  TResult extends object
+>(
+  sources: TSources,
+  combiner: (...args: StatesFrom<TSources>) => TResult
+): { subject: Subject<TResult>; destroy: () => void } {
+
+  // A helper function to get the current values from all sources at any time.
+  const getCurrentValues = (): StatesFrom<TSources> => {
+    return sources.map(source => 
+      // Subjects are functions, Models have a .read() method
+      typeof source === 'function' ? source() : (source as ModelAPI<any>).read()
+    ) as StatesFrom<TSources>;
+  };
+
+  // Create the final view subject, initialized with the first combined state.
+  const viewSubject = createSubject<TResult>(combiner(...getCurrentValues()));
+
+  // The function that will run whenever any source changes.
+  const update = () => {
+    const newValues = getCurrentValues();
+    viewSubject.set(combiner(...newValues));
+  };
+
+  // Subscribe to every source and store the unsubscribe functions.
+  const unsubscribers = sources.map(source => 
+    typeof source === 'function' 
+      ? (source as Subject<any>).subscribe(update) 
+      : (source as ModelAPI<any>).onChange(update)
+  );
+
+  // The destroy function cleans everything up.
+  const destroy = () => {
+    unsubscribers.forEach(unsub => unsub());
+  };
+
+  return { subject: viewSubject, destroy };
+}
+
+/**
+ * A hook-style utility to manage loading states for non-urgent async updates.
+ * This is a GPUI-TS equivalent of React's `useTransition` and Solid's `useTransition`.
+ *
+ * It provides a reactive boolean to show loading indicators and a function to wrap
+ * your async work, which automatically manages the pending state.
+ *
+ * @returns A tuple `[isPending, startTransition]`.
+ *   - `isPending`: A reactive `Subject<boolean>` that is `true` while the transition is active.
+ *   - `startTransition`: An async function that you wrap your async work in.
+ *
+ * @example
+ * const [isSaving, startSave] = useTransition();
+ *
+ * // In your event handler:
+ * startSave(async () => {
+ *   await api.saveUserData(data);
+ * });
+ *
+ * // In your view:
+ * html`${isSaving() ? 'Saving...' : 'Save'}`
+ */
+export function useTransition(): [Subject<boolean>, (work: () => Promise<any>) => Promise<void>] {
+  const isPending = createSubject(false);
+
+  const startTransition = async (work: () => Promise<any>): Promise<void> => {
+    isPending.set(true);
+    try {
+      await work();
+    } finally {
+      isPending.set(false);
+    }
+  };
+
+  return [isPending, startTransition];
+}
+
+
+/**
+ * A hook-style utility for managing optimistic UI updates. It provides an instantly-updated
+ * state for the UI while the actual async operation completes in the background. If the
+ * operation fails, the state automatically reverts.
+ *
+ * @param source The source of truth (a GPUI-TS Model or Subject).
+ * @returns A tuple `[optimisticState, startOptimisticUpdate]`.
+ *   - `optimisticState`: A new `Subject` that immediately reflects optimistic changes.
+ *                      Use this subject for rendering in your view.
+ *   - `startOptimisticUpdate`: A function to wrap your async work. It takes an "action"
+ *                           function that calculates the optimistic state.
+ *
+ * @example
+ * const [optimisticTodos, updateTodos] = useOptimistic(todosModel);
+ *
+ * // In event handler:
+ * updateTodos(
+ *   (currentTodos, newTodo) => [...currentTodos, newTodo], // Optimistic action
+ *   async (newTodo) => {
+ *     await api.createTodo(newTodo); // Async work
+ *   },
+ *   newTodo // Arguments for the action/async work
+ * );
+ */
+import type { DeepReadonly } from './index';
+
+export function useOptimistic<TState extends object, TArgs extends any[]>(
+  source: ModelAPI<TState> | Subject<DeepReadonly<TState>>
+): [
+  Subject<DeepReadonly<TState>>,
+  (
+    action: (currentState: DeepReadonly<TState>, ...args: TArgs) => DeepReadonly<TState>,
+    asyncWork: (...args: TArgs) => Promise<any>,
+    ...args: TArgs
+  ) => Promise<void>
+] {
+  const getSourceValue = (): DeepReadonly<TState> => 
+    typeof source === 'function' ? source() : (source as ModelAPI<TState>).read();
+  
+  // 1. The optimisticState subject holds the UI-facing state.
+  const optimisticState = createSubject<DeepReadonly<TState>>(getSourceValue());
+
+  // 2. Keep the optimistic state in sync with the source of truth.
+  const unsubscribe = typeof source === 'function'
+    ? source.subscribe((...args: any[]) => {
+        // Subject.subscribe passes no arguments, so we call optimisticState.set with current value
+        optimisticState.set(source());
+      })
+    : (source as ModelAPI<TState>).onChange((newState: TState) => {
+        return optimisticState.set(structuredClone(newState) as DeepReadonly<TState>);
+      });
+
+  // This is a placeholder for a real effect cleanup if this were in a component context.
+  // In a real app, you'd tie this to a view's lifecycle.
+  // onCleanup(unsubscribe); 
+
+  const startOptimisticUpdate = async (
+    action: (currentState: DeepReadonly<TState>, ...args: TArgs) => DeepReadonly<TState>,
+    asyncWork: (...args: TArgs) => Promise<any>,
+    ...args: TArgs
+  ): Promise<void> => {
+    const originalState = getSourceValue();
+    
+    // 1. Immediately apply the optimistic update to our UI-facing subject.
+    const newOptimisticState = action(originalState, ...args);
+    optimisticState.set(structuredClone(newOptimisticState) as DeepReadonly<TState>);
+
+    try {
+      // 2. Perform the async work.
+      await asyncWork(...args);
+      // 3. On success, the source of truth will eventually be updated by another
+      //    mechanism (e.g., a server push or a refetch), which will then flow
+      //    down and sync our `optimisticState` via the subscription.
+    } catch (error) {
+      // 4. On failure, immediately revert the optimistic state to the original state.
+      console.error("Optimistic update failed, reverting state.", error);
+      optimisticState.set(originalState);
+      // Optionally re-throw or handle the error
+      throw error;
+    }
+  };
+
+  return [optimisticState, startOptimisticUpdate];
+}
+
+/**
+ * Creates a declarative reaction that runs a side-effect whenever a
+ * source Model or Subject changes.
+ * @param source The reactive source to watch.
+ * @param effect The function to run with the new state of the source.
+ * @returns A `destroy` function to clean up the subscription.
+ */
+export function createReaction<T extends object>(
+  source: ModelAPI<T> | Subject<T>,
+  effect: (value: T) => void
+): { destroy: () => void } {
+  const unsubscribe = typeof source === 'function'
+    ? source.subscribe(() => effect(source()))
+    : source.onChange(effect);
+
+  return { destroy: unsubscribe };
+}
+
+
+/**
+ * Creates a resource that is driven by a selection from another resource.
+ * This encapsulates the common "cascading dropdown" pattern.
+ *
+ * @param parentResource The resource providing the list of options to select from.
+ * @param selectionModel The model that holds the currently selected item from the parent.
+ * @param fetcher The async function to fetch the child data based on the selection.
+ * @returns The new child resource.
+ */
+export function createCascadingResource<TParent, TSelection, TChild>(
+  parentResource: ResourceReturn<TParent[], any>[0],
+  selectionModel: ModelAPI<{ selected: TSelection | null }>,
+  fetcher: (selection: TSelection) => Promise<TChild[]>
+): ResourceReturn<TChild[], any>[0] {
+  // Automatically select the first item when the parent data loads.
+  createReaction(parentResource, (res) => {
+    if (res.data && res.data.length > 0 && selectionModel.read().selected === null) {
+      // Assuming the first item is what we want to select.
+      // A more robust version might take a selector function.
+      selectionModel.set('selected', res.data[0] as any);
+    }
+  });
+
+  const [childResource] = createResource(
+    selectionModel,
+    async ({ selected }) => {
+      if (!selected) return [];
+      return fetcher(selected);
+    }
+  );
+
+  return childResource;
+}
