@@ -1291,6 +1291,81 @@ updateBio('Full-stack developer')
 console.log(userBio()) // "Full-stack developer"
 ```
 
+#### Unified Event Bus with `createAppEvent`
+
+For applications that need a unified event system where all actions emit traceable events, use `createAppEvent`. This variant integrates with GPUI-TS's event infrastructure, automatically registering events at runtime and maintaining type safety across the entire app.
+
+```typescript
+import { createAppEvent, createSchema } from 'gpui-ts'
+
+// Simple schema without events defined
+const schema = createSchema()
+  .model('todos', { items: [] as Array<{id: number; text: string; completed: boolean}> })
+  .build()
+
+let app = createApp(schema)
+
+// createAppEvent registers events at runtime and returns a typed app
+const [onAdd, addTodo, appWithAdd] = createAppEvent(
+  app,
+  'todos',
+  'todoAdded',
+  (text: string, priority: 'high' | 'low') => ({
+    text,
+    priority,
+    timestamp: Date.now()
+  }),
+  (payload, state, ctx) => {
+    // Handler receives fully typed payload
+    state.items.push({
+      id: Date.now(),
+      text: payload.text,
+      completed: false
+    })
+    // Event automatically emitted to listeners
+  }
+)
+
+app = appWithAdd  // Update app reference to get new types
+
+// Chain multiple events - each returns typed app
+const [onToggle, toggleTodo, appWithToggle] = createAppEvent(
+  app,
+  'todos',
+  'todoToggled',
+  (id: number) => ({ id }),
+  (payload, state) => {
+    const todo = state.items.find(t => t.id === payload.id)
+    if (todo) todo.completed = !todo.completed
+  }
+)
+
+app = appWithToggle
+
+// Now app has both events typed - subscribe to them
+app.models.todos.on.todoAdded(payload => {
+  console.log(`Todo added: ${payload.text} (${payload.priority})`)
+  // Payload is fully typed: { text: string, priority: 'high' | 'low', timestamp: number }
+})
+
+app.models.todos.on.todoToggled(payload => {
+  console.log(`Todo toggled: ${payload.id}`)
+})
+
+// Use the actions
+addTodo('Buy milk', 'high')   // Emits 'todos:todoAdded' event
+toggleTodo(1)                 // Emits 'todos:todoToggled' event
+```
+
+**When to use `createAppEvent` vs `createModelEvent`:**
+
+- **Use `createModelEvent`** for simple controllers where you don't need event infrastructure
+- **Use `createAppEvent`** when you want:
+  - A unified event bus for analytics, logging, or debugging
+  - Events to be traceable across the application
+  - Schema events to be registered at runtime with full type safety
+  - EventHandler transformation chains (`.map()`, `.filter()`, etc.)
+
 ## FAQ
 
 ### Q: How does GPUI-TS compare to React's built-in state management?

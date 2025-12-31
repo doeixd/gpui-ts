@@ -23,7 +23,8 @@ import type {
   FocusedModel,
   ModelContext,
   EventHandler,
-  Subject
+  Subject,
+  GPUIApp
 } from './index'
 import { createEvent, createSubject } from './index'
 
@@ -992,6 +993,88 @@ export function addEventToSchema<
 }
 
 // =============================================================================
+// TYPE UTILITIES FOR RUNTIME EVENT REGISTRATION
+// =============================================================================
+
+/**
+ * Extracts the state type of a specific model from an App instance.
+ *
+ * This utility type navigates the App's schema to retrieve the initialState type
+ * for a given model name, enabling type-safe access to model state in generic contexts.
+ *
+ * @template TApp The GPUIApp type to extract from
+ * @template TModelName The name of the model whose state type to extract
+ *
+ * @example
+ * ```ts
+ * type MyApp = GPUIApp<{
+ *   models: {
+ *     todos: { initialState: { items: Todo[] } }
+ *     user: { initialState: { name: string } }
+ *   }
+ * }>
+ *
+ * type TodoState = ModelStateType<MyApp, 'todos'>  // { items: Todo[] }
+ * type UserState = ModelStateType<MyApp, 'user'>   // { name: string }
+ * ```
+ */
+export type ModelStateType<TApp extends GPUIApp<any>, TModelName extends keyof TApp['models'] & string> =
+  TApp extends GPUIApp<infer TSchema>
+    ? TModelName extends keyof TSchema['models']
+      ? TSchema['models'][TModelName]['initialState']
+      : never
+    : never
+
+/**
+ * Creates a new App type with an additional event registered to a specific model.
+ *
+ * This utility type is used by `createAppEvent` to track runtime-registered events
+ * in the type system, enabling full type safety for events that don't exist in the
+ * original schema.
+ *
+ * @template TApp The GPUIApp type to extend
+ * @template TModelName The model to add the event to
+ * @template TEventName The name of the new event
+ * @template TEventCreator The event creator function type
+ *
+ * @example
+ * ```ts
+ * type BaseApp = GPUIApp<{
+ *   models: {
+ *     todos: { initialState: { items: [] } }
+ *   }
+ * }>
+ *
+ * type AppWithTodoAdded = AppWithEvent<
+ *   BaseApp,
+ *   'todos',
+ *   'todoAdded',
+ *   (text: string) => { text: string; timestamp: number }
+ * >
+ *
+ * // AppWithTodoAdded now has todos.emit.todoAdded() and todos.on.todoAdded() typed
+ * ```
+ */
+export type AppWithEvent<
+  TApp extends GPUIApp<any>,
+  TModelName extends keyof TApp['models'] & string,
+  TEventName extends string,
+  TEventCreator extends (...args: any[]) => any
+> = TApp extends GPUIApp<infer TSchema>
+  ? GPUIApp<
+      TSchema & {
+        models: TSchema['models'] & {
+          [K in TModelName]: TSchema['models'][K] & {
+            events: (TSchema['models'][K] extends { events: infer E } ? E : {}) & {
+              [E in TEventName]: TEventCreator
+            }
+          }
+        }
+      }
+    >
+  : never
+
+// =============================================================================
 // FUNCTIONAL CONTROLLER UTILITIES
 // =============================================================================
 
@@ -1259,6 +1342,236 @@ export function createModelSubject<TState extends object, TResult>(
 
   // Return the subject
   return subject
+}
+
+/**
+ * Creates an event that integrates with the schema event system and automatically
+ * updates a model when emitted.
+ *
+ * This utility extends the Functional Controller pattern by integrating with GPUI-TS's
+ * schema-based event system. It registers events at runtime if they don't exist in the
+ * schema, providing a hybrid approach that combines the flexibility of runtime events
+ * with the type safety of schema events.
+ *
+ * Key features:
+ * - Hybrid event registration: uses schema events if they exist, creates runtime events if not
+ * - Type-safe event emission via model.emit namespace
+ * - Automatic model updates when events are emitted
+ * - Returns updated app type that tracks accumulated events
+ * - Enables event chaining across multiple calls
+ * - Full EventHandler transformation support (.map(), .filter(), etc.)
+ *
+ * @template TApp The App type to extend
+ * @template TModelName The name of the model to attach the event to
+ * @template TEventName The name of the event to create
+ * @template TEventCreator The event creator function type
+ *
+ * @param app The App instance
+ * @param modelName The name of the model to attach the event to
+ * @param eventName The name of the event to create
+ * @param eventCreator Function that transforms arguments into the event payload
+ * @param handler Function that receives the payload, draft state, and context to update the model
+ *
+ * @returns A 3-tuple of:
+ *          1. EventHandler - Can be subscribed to, chained with .map()/.filter(), etc.
+ *          2. emit function - Triggers the handler with the given arguments
+ *          3. Updated App - Type-safe app with the new event registered
+ *
+ * @example
+ * ```ts
+ * // Start with simple schema (no events)
+ * const schema = createSchema()
+ *   .model('todos', { items: [] as Array<{id: number; text: string}> })
+ *   .build()
+ *
+ * let app = createApp(schema)
+ *
+ * // Create event - registers at runtime if not in schema
+ * const [onAddTodo, addTodo, appWithEvent] = createAppEvent(
+ *   app,
+ *   'todos',
+ *   'todoAdded',
+ *   (text: string, priority: 'high' | 'low') => ({
+ *     text,
+ *     priority,
+ *     timestamp: Date.now()
+ *   }),
+ *   (payload, state, ctx) => {
+ *     // payload is typed as { text: string, priority: 'high' | 'low', timestamp: number }
+ *     state.items.push({
+ *       id: Date.now(),
+ *       text: payload.text
+ *     })
+ *     // Event automatically emitted after successful update
+ *   }
+ * )
+ *
+ * // Update app reference to get new types
+ * app = appWithEvent
+ *
+ * // Now type-safe! Event is registered in emit/on namespaces
+ * app.models.todos.on.todoAdded(payload => {
+ *   console.log('Todo added:', payload)  // Fully typed
+ * })
+ *
+ * // Type-safe call (matches event creator signature)
+ * addTodo('Buy milk', 'high')
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Chain multiple events
+ * let app = createApp(schema)
+ *
+ * const [onAdd, addTodo, app2] = createAppEvent(
+ *   app, 'todos', 'todoAdded',
+ *   (text: string) => ({ text }),
+ *   (payload, state) => {
+ *     state.items.push({ id: Date.now(), text: payload.text })
+ *   }
+ * )
+ *
+ * const [onToggle, toggleTodo, app3] = createAppEvent(
+ *   app2, 'todos', 'todoToggled',
+ *   (id: number) => ({ id }),
+ *   (payload, state) => {
+ *     const todo = state.items.find(t => t.id === payload.id)
+ *     if (todo) todo.completed = !todo.completed
+ *   }
+ * )
+ *
+ * app = app3  // app now has both events typed
+ * app.models.todos.on.todoAdded(p => console.log(p))
+ * app.models.todos.on.todoToggled(p => console.log(p))
+ * ```
+ *
+ * @example
+ * ```ts
+ * // EventHandler transformations
+ * const [onAddTodo, addTodo, app2] = createAppEvent(
+ *   app, 'todos', 'todoAdded',
+ *   (text: string, priority: 'high' | 'low') => ({ text, priority }),
+ *   (payload, state) => {
+ *     state.items.push({ id: Date.now(), text: payload.text })
+ *   }
+ * )
+ *
+ * // Transform events before they reach subscribers
+ * const highPriorityOnly = onAddTodo
+ *   .filter(([text, priority]) => priority === 'high')
+ *   .map(([text, priority]) => ({ text, urgent: true }))
+ *
+ * highPriorityOnly.subscribe(data => {
+ *   console.log('High priority todo:', data)
+ * })
+ * ```
+ *
+ * @remarks
+ * - The handler receives full ModelContext with access to ctx.notify(), ctx.emit(), ctx.batch(), etc.
+ * - If the event exists in the schema, the existing event type is used
+ * - If the event doesn't exist, it's registered at runtime and added to model.emit/on namespaces
+ * - The event is only emitted if the handler completes successfully (automatic rollback on errors)
+ * - The returned app type accumulates all registered events for full type safety
+ * - Schema event listeners and runtime listeners are both notified when the event fires
+ */
+export function createAppEvent<
+  TApp extends GPUIApp<any>,
+  TModelName extends keyof TApp['models'] & string,
+  TEventName extends string,
+  TEventCreator extends (...args: any[]) => any
+>(
+  app: TApp,
+  modelName: TModelName,
+  eventName: TEventName,
+  eventCreator: TEventCreator,
+  handler: (
+    payload: ReturnType<TEventCreator>,
+    draft: ModelStateType<TApp, TModelName>,
+    ctx: ModelContext<ModelStateType<TApp, TModelName>>
+  ) => void
+): [
+  EventHandler<Parameters<TEventCreator>, Parameters<TEventCreator>>,
+  (...args: Parameters<TEventCreator>) => void,
+  AppWithEvent<TApp, TModelName, TEventName, TEventCreator>
+] {
+  const model = app.models[modelName] as any
+
+  // 1. Create the event helper namespaces if they don't exist
+  // These provide a typed interface for emitting and listening to events
+  if (!model.__eventHelpers) {
+    model.__eventHelpers = {
+      emit: {},
+      on: {}
+    }
+  }
+
+  // 2. Register the event helper
+  const fullEventName = `${modelName}:${eventName}`
+
+  // Create emit helper
+  model.__eventHelpers.emit[eventName] = (...args: Parameters<TEventCreator>) => {
+    const payload = eventCreator(...args)
+    // Emit using the model's built-in emit function
+    model.emit({ type: fullEventName, payload })
+  }
+
+  // Create on helper
+  model.__eventHelpers.on[eventName] = (listener: (payload: ReturnType<TEventCreator>) => void) => {
+    // Subscribe using the model's onEvent function
+    return model.onEvent((event: any) => {
+      if (event.type === fullEventName) {
+        listener(event.payload)
+      }
+    })
+  }
+
+  // Expose helpers on the model for easier access
+  if (!model.emit[eventName]) {
+    model.emit[eventName] = model.__eventHelpers.emit[eventName]
+  }
+  if (!model.on) {
+    model.on = {}
+  }
+  model.on[eventName] = model.__eventHelpers.on[eventName]
+
+  // Update schema for reference (though types are compile-time)
+  if (!model.schema) {
+    model.schema = {}
+  }
+  if (!model.schema.events) {
+    model.schema.events = {}
+  }
+  model.schema.events[eventName] = eventCreator
+
+  // 3. Create event handler for the action
+  const [eventHandler, baseEmit] = createEvent<Parameters<TEventCreator>>()
+
+  // 4. Create a custom emit function that accepts spread arguments
+  const customEmit = (...args: Parameters<TEventCreator>) => {
+    // Emit the tuple to the base emit function
+    baseEmit(args)
+  }
+
+  // 5. Wire to model updates with event emission
+  eventHandler.subscribe((argsArray: Parameters<TEventCreator>) => {
+    model.update((draft: any, ctx: any) => {
+      // Call event creator to build payload
+      // argsArray is the tuple of arguments, spread it to call eventCreator
+      const payload = (eventCreator as any)(...argsArray)
+
+      // Execute user handler
+      handler(payload, draft, ctx)
+
+      // Emit the event (notify listeners)
+      ctx.emit({ type: fullEventName, payload })
+
+      // Notify subscribers of state changes
+      ctx.notify()
+    })
+  })
+
+  // 6. Return [handler, emitter, typed app]
+  return [eventHandler, customEmit, app as any]
 }
 
 // =============================================================================

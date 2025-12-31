@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { createApp, createModelEvent, createModelSubject, lens } from '../src/index'
+import { createApp, createModelEvent, createModelSubject, createAppEvent, lens, createSchema } from '../src/index'
 
 describe('Functional Controller Pattern', () => {
   describe('createModelEvent', () => {
@@ -642,6 +642,426 @@ describe('Functional Controller Pattern', () => {
 
       expect(completedCount()).toBe(0)
       expect(activeCount()).toBe(2)
+    })
+  })
+
+  describe('createAppEvent', () => {
+    it('should create event that updates model when emitted', () => {
+      const schema = createSchema()
+        .model('counter', { count: 0 })
+        .build()
+
+      let app = createApp(schema)
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'counter',
+        'incremented',
+        (amount: number) => ({ amount, timestamp: Date.now() }),
+        (payload, state) => {
+          state.count += payload.amount
+        }
+      )
+
+      app = appWithEvent
+
+      expect(app.models.counter.read().count).toBe(0)
+      emit(5)
+      expect(app.models.counter.read().count).toBe(5)
+      emit(3)
+      expect(app.models.counter.read().count).toBe(8)
+    })
+
+    it('should register event at runtime if not in schema', () => {
+      const schema = createSchema()
+        .model('todos', { items: [] as Array<{ id: number; text: string }> })
+        .build()
+
+      let app = createApp(schema)
+
+      // Verify event helper doesn't exist initially
+      expect((app.models.todos as any).__eventHelpers).toBeUndefined()
+      expect((app.models.todos as any).on?.todoAdded).toBeUndefined()
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'todos',
+        'todoAdded',
+        (text: string) => ({ text, timestamp: Date.now() }),
+        (payload, state) => {
+          state.items.push({ id: Date.now(), text: payload.text })
+        }
+      )
+
+      app = appWithEvent
+
+      // Verify event was registered
+      expect((app.models.todos as any).__eventHelpers).toBeDefined()
+      expect((app.models.todos as any).__eventHelpers.emit.todoAdded).toBeInstanceOf(Function)
+      expect((app.models.todos as any).on).toBeDefined()
+      expect((app.models.todos as any).on.todoAdded).toBeInstanceOf(Function)
+    })
+
+    it('should emit through model event system', () => {
+      const schema = createSchema()
+        .model('todos', { items: [] as Array<{ id: number; text: string }> })
+        .build()
+
+      let app = createApp(schema)
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'todos',
+        'todoAdded',
+        (text: string) => ({ text, timestamp: Date.now() }),
+        (payload, state) => {
+          state.items.push({ id: Date.now(), text: payload.text })
+        }
+      )
+
+      app = appWithEvent
+
+      const events: any[] = []
+      // Use the on helper created by createAppEvent
+      ;(app.models.todos as any).on.todoAdded((payload: any) => {
+        events.push(payload)
+      })
+
+      emit('Buy milk')
+      emit('Walk dog')
+
+      expect(events.length).toBe(2)
+      expect(events[0].text).toBe('Buy milk')
+      expect(events[1].text).toBe('Walk dog')
+      expect(events[0].timestamp).toBeDefined()
+      expect(events[1].timestamp).toBeDefined()
+    })
+
+    it('should provide typed payload to handler', () => {
+      const schema = createSchema()
+        .model('user', { name: '', age: 0 })
+        .build()
+
+      let app = createApp(schema)
+
+      let receivedPayload: any = null
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'user',
+        'userUpdated',
+        (name: string, age: number) => ({ name, age, timestamp: Date.now() }),
+        (payload, state, ctx) => {
+          receivedPayload = payload
+          state.name = payload.name
+          state.age = payload.age
+        }
+      )
+
+      app = appWithEvent
+
+      emit('Alice', 30)
+
+      expect(receivedPayload).toBeDefined()
+      expect(receivedPayload.name).toBe('Alice')
+      expect(receivedPayload.age).toBe(30)
+      expect(receivedPayload.timestamp).toBeDefined()
+      expect(app.models.user.read().name).toBe('Alice')
+      expect(app.models.user.read().age).toBe(30)
+    })
+
+    it('should support event transformation chains', () => {
+      const schema = createSchema()
+        .model('todos', { items: [] as Array<{ id: number; text: string; priority: string }> })
+        .build()
+
+      let app = createApp(schema)
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'todos',
+        'todoAdded',
+        (text: string, priority: 'high' | 'low') => ({ text, priority }),
+        (payload, state) => {
+          state.items.push({ id: Date.now(), text: payload.text, priority: payload.priority })
+        }
+      )
+
+      app = appWithEvent
+
+      const highPriorityItems: any[] = []
+      const highPriorityHandler = handler
+        .filter(([text, priority]) => priority === 'high')
+        .map(([text, priority]) => ({ text, urgent: true }))
+
+      highPriorityHandler.subscribe(data => {
+        highPriorityItems.push(data)
+      })
+
+      emit('Buy milk', 'low')
+      emit('Fix bug', 'high')
+      emit('Walk dog', 'low')
+      emit('Deploy to prod', 'high')
+
+      expect(app.models.todos.read().items.length).toBe(4)
+      expect(highPriorityItems.length).toBe(2)
+      expect(highPriorityItems[0].text).toBe('Fix bug')
+      expect(highPriorityItems[0].urgent).toBe(true)
+      expect(highPriorityItems[1].text).toBe('Deploy to prod')
+      expect(highPriorityItems[1].urgent).toBe(true)
+    })
+
+    it('should allow chaining multiple createAppEvent calls', () => {
+      const schema = createSchema()
+        .model('todos', { items: [] as Array<{ id: number; text: string; completed: boolean }>, nextId: 1 })
+        .build()
+
+      let app = createApp(schema)
+
+      // First event: add todo
+      const [onAdd, addTodo, app2] = createAppEvent(
+        app,
+        'todos',
+        'todoAdded',
+        (text: string) => ({ text }),
+        (payload, state) => {
+          state.items.push({ id: state.nextId++, text: payload.text, completed: false })
+        }
+      )
+
+      // Second event: toggle todo
+      const [onToggle, toggleTodo, app3] = createAppEvent(
+        app2,
+        'todos',
+        'todoToggled',
+        (id: number) => ({ id }),
+        (payload, state) => {
+          const todo = state.items.find(t => t.id === payload.id)
+          if (todo) todo.completed = !todo.completed
+        }
+      )
+
+      // Third event: remove todo
+      const [onRemove, removeTodo, app4] = createAppEvent(
+        app3,
+        'todos',
+        'todoRemoved',
+        (id: number) => ({ id }),
+        (payload, state) => {
+          state.items = state.items.filter(t => t.id !== payload.id)
+        }
+      )
+
+      app = app4
+
+      // Verify all events are registered
+      expect((app.models.todos as any).__eventHelpers.emit.todoAdded).toBeInstanceOf(Function)
+      expect((app.models.todos as any).__eventHelpers.emit.todoToggled).toBeInstanceOf(Function)
+      expect((app.models.todos as any).__eventHelpers.emit.todoRemoved).toBeInstanceOf(Function)
+
+      // Test event listeners
+      const addedEvents: any[] = []
+      const toggledEvents: any[] = []
+      const removedEvents: any[] = []
+
+      ;(app.models.todos as any).on.todoAdded((p: any) => addedEvents.push(p))
+      ;(app.models.todos as any).on.todoToggled((p: any) => toggledEvents.push(p))
+      ;(app.models.todos as any).on.todoRemoved((p: any) => removedEvents.push(p))
+
+      // Use the events
+      addTodo('Buy milk')
+      addTodo('Walk dog')
+      const firstId = app.models.todos.read().items[0].id
+      toggleTodo(firstId)
+      removeTodo(firstId)
+
+      expect(addedEvents.length).toBe(2)
+      expect(toggledEvents.length).toBe(1)
+      expect(removedEvents.length).toBe(1)
+      expect(app.models.todos.read().items.length).toBe(1)
+      expect(app.models.todos.read().items[0].text).toBe('Walk dog')
+    })
+
+    it('should handle errors with rollback', () => {
+      const schema = createSchema()
+        .model('counter', { count: 0 })
+        .build()
+
+      let app = createApp(schema)
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'counter',
+        'incremented',
+        (amount: number) => ({ amount }),
+        (payload, state) => {
+          state.count += payload.amount
+          if (payload.amount > 10) {
+            throw new Error('Amount too large')
+          }
+        }
+      )
+
+      app = appWithEvent
+
+      emit(5)
+      expect(app.models.counter.read().count).toBe(5)
+
+      // This should fail and rollback
+      expect(() => emit(15)).toThrow('Amount too large')
+      expect(app.models.counter.read().count).toBe(5) // Should still be 5
+
+      emit(3)
+      expect(app.models.counter.read().count).toBe(8)
+    })
+
+    it('should trigger reactive subscriptions', () => {
+      const schema = createSchema()
+        .model('todos', { items: [] as Array<{ id: number; text: string }> })
+        .build()
+
+      let app = createApp(schema)
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'todos',
+        'todoAdded',
+        (text: string) => ({ text }),
+        (payload, state) => {
+          state.items.push({ id: Date.now(), text: payload.text })
+        }
+      )
+
+      app = appWithEvent
+
+      const updates: any[] = []
+      app.models.todos.onChange(state => {
+        updates.push({ itemCount: state.items.length })
+      })
+
+      emit('Buy milk')
+      emit('Walk dog')
+
+      expect(updates.length).toBe(2)
+      expect(updates[0].itemCount).toBe(1)
+      expect(updates[1].itemCount).toBe(2)
+    })
+
+    it('should work with complex payloads', () => {
+      const schema = createSchema()
+        .model('tasks', {
+          tasks: [] as Array<{
+            id: number
+            title: string
+            priority: 'high' | 'medium' | 'low'
+            tags: string[]
+            assignee?: string
+          }>
+        })
+        .build()
+
+      let app = createApp(schema)
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'tasks',
+        'taskCreated',
+        (
+          title: string,
+          priority: 'high' | 'medium' | 'low',
+          tags: string[],
+          assignee?: string
+        ) => ({
+          title,
+          priority,
+          tags,
+          assignee,
+          createdAt: Date.now()
+        }),
+        (payload, state) => {
+          state.tasks.push({
+            id: Date.now(),
+            title: payload.title,
+            priority: payload.priority,
+            tags: payload.tags,
+            assignee: payload.assignee
+          })
+        }
+      )
+
+      app = appWithEvent
+
+      emit('Fix critical bug', 'high', ['backend', 'urgent'], 'Alice')
+      emit('Update docs', 'low', ['documentation'])
+
+      expect(app.models.tasks.read().tasks.length).toBe(2)
+      expect(app.models.tasks.read().tasks[0].title).toBe('Fix critical bug')
+      expect(app.models.tasks.read().tasks[0].priority).toBe('high')
+      expect(app.models.tasks.read().tasks[0].tags).toEqual(['backend', 'urgent'])
+      expect(app.models.tasks.read().tasks[0].assignee).toBe('Alice')
+      expect(app.models.tasks.read().tasks[1].assignee).toBeUndefined()
+    })
+
+    it('should provide context to handler', () => {
+      const schema = createSchema()
+        .model('user', { name: '', notifications: [] as string[] })
+        .build()
+
+      let app = createApp(schema)
+
+      let contextProvided = false
+
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'user',
+        'nameChanged',
+        (name: string) => ({ name }),
+        (payload, state, ctx) => {
+          contextProvided = ctx !== undefined
+          state.name = payload.name
+
+          // Use context to emit additional event
+          if (ctx) {
+            ctx.emit({ type: 'user:notification', payload: { message: `Name changed to ${payload.name}` } })
+          }
+        }
+      )
+
+      app = appWithEvent
+
+      emit('Alice')
+
+      expect(contextProvided).toBe(true)
+      expect(app.models.user.read().name).toBe('Alice')
+    })
+
+    it('should infer types correctly', () => {
+      const schema = createSchema()
+        .model('counter', { count: 0 })
+        .build()
+
+      let app = createApp(schema)
+
+      // Type inference test - this should compile without explicit types
+      const [handler, emit, appWithEvent] = createAppEvent(
+        app,
+        'counter',
+        'incremented',
+        (amount: number) => ({ amount, timestamp: Date.now() }),
+        (payload, state, ctx) => {
+          // payload.amount should be inferred as number
+          // state.count should be inferred as number
+          state.count += payload.amount
+        }
+      )
+
+      app = appWithEvent
+
+      // This should compile with correct types
+      emit(5) // number argument expected
+      // emit('hello') // Would be a type error
+
+      expect(app.models.counter.read().count).toBe(5)
     })
   })
 })
