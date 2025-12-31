@@ -28,30 +28,43 @@ GPUI-TS solves these problems with:
 ```typescript
 // Define your entire app state structure with full type inference
 const AppSchema = createSchema()
-  .model('todos', { items: [], filter: 'all' })
+  .model('todos', { items: [] as Array<{ id: number; text: string }> })
   .model('ui', { newTodoText: '', editingId: null })
   .build()
 
 const app = createApp(AppSchema)
 
 // All state mutations are declarative and type-safe
-const [onAddTodo, emitAddTodo] = createEvent<string>()
-const validTodo = onAddTodo.filter(text => text.trim().length > 0)
-
-const todos = createSubject(
-  [],
-  validTodo(text => todos => [...todos, { text, id: Date.now() }])
+const [onAddTodo, addTodo] = createModelEvent(
+  app.models.todos,
+  (text: string, state) => {
+    if (text.trim().length > 0) {
+      state.items.push({ id: Date.now(), text })
+    }
+  }
 )
+
+// Reactive subjects auto-sync with model state
+const todoCount = createModelSubject(app.models.todos, s => s.items.length)
 
 // Views automatically re-render when state changes
 createView(app.models.todos, container, (state, ctx) => html`
-  <input 
-    .value=${ctx.bind('newTodoText').value}
-    @input=${ctx.bind('newTodoText').onChange}
-  />
-  <ul>
-    ${state.items.map(todo => html`<li>${todo.text}</li>`)}
-  </ul>
+  <div>
+    <h2>Todos (${todoCount()})</h2>
+    <input
+      .value=${ctx.bind('newTodoText').value}
+      @input=${ctx.bind('newTodoText').onChange}
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === 'Enter') {
+          addTodo(app.models.ui.read().newTodoText)
+          ctx.updateAt('newTodoText', () => '')
+        }
+      }}
+    />
+    <ul>
+      ${state.items.map(todo => html`<li>${todo.text}</li>`)}
+    </ul>
+  </div>
 `)
 ```
 
@@ -1141,6 +1154,141 @@ const socket = new WebSocket('ws://localhost:8080')
 socket.onmessage = (event) => {
   emitSocketMessage(JSON.parse(event.data))
 }
+```
+
+### Functional Controller Pattern
+
+The Functional Controller pattern decouples business logic (actions/reactions) from state definitions (schemas), allowing your application to scale horizontally without making schema files thousands of lines long.
+
+```typescript
+import { createModelEvent, createModelSubject } from 'gpui-ts'
+
+// Define schema (clean and focused)
+const TodoSchema = createSchema()
+  .model('todos', {
+    items: [] as Array<{ id: number; text: string; completed: boolean }>
+  })
+  .build()
+
+const app = createApp(TodoSchema)
+
+// === Controller file: features/todos/controller.ts ===
+
+// READS: Reactive subjects that auto-sync with model
+export const todoCount = createModelSubject(
+  app.models.todos,
+  state => state.items.length
+)
+
+export const activeCount = createModelSubject(
+  app.models.todos,
+  state => state.items.filter(t => !t.completed).length
+)
+
+export const completedCount = createModelSubject(
+  app.models.todos,
+  state => state.items.filter(t => t.completed).length
+)
+
+// WRITES: Events wired directly to model updates
+export const [onAddTodo, addTodo] = createModelEvent(
+  app.models.todos,
+  (text: string, state, ctx) => {
+    state.items.push({ id: Date.now(), text, completed: false })
+    // Context available for ModelAPI targets
+    ctx?.emit({ type: 'todo:added', text })
+  }
+)
+
+export const [onToggleTodo, toggleTodo] = createModelEvent(
+  app.models.todos,
+  (id: number, state) => {
+    const todo = state.items.find(t => t.id === id)
+    if (todo) todo.completed = !todo.completed
+  }
+)
+
+export const [onDeleteTodo, deleteTodo] = createModelEvent(
+  app.models.todos,
+  (id: number, state) => {
+    state.items = state.items.filter(t => t.id !== id)
+  }
+)
+
+// === View file: features/todos/view.ts ===
+
+// Import only what you need - fully decoupled from App/Model instances
+import { addTodo, toggleTodo, deleteTodo, todoCount, activeCount } from './controller'
+
+createView(app.models.todos, container, (state) => html`
+  <div>
+    <h1>Todos (${todoCount()})</h1>
+    <p>${activeCount()} active, ${completedCount()} completed</p>
+
+    <input
+      id="new-todo"
+      placeholder="What needs to be done?"
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === 'Enter') {
+          const input = e.target as HTMLInputElement
+          addTodo(input.value)
+          input.value = ''
+        }
+      }}
+    />
+
+    <ul>
+      ${state.items.map(todo => html`
+        <li>
+          <input
+            type="checkbox"
+            .checked=${todo.completed}
+            @change=${() => toggleTodo(todo.id)}
+          />
+          <span class=${todo.completed ? 'completed' : ''}>
+            ${todo.text}
+          </span>
+          <button @click=${() => deleteTodo(todo.id)}>×</button>
+        </li>
+      `)}
+    </ul>
+  </div>
+`)
+```
+
+**Benefits of this pattern:**
+
+- **Refactoring safety**: Move `app.models.todos` to `app.models.work.todos`? Only update the controller file
+- **Testability**: Test actions in isolation without spinning up the whole UI
+- **No magic strings**: Call functions like `addTodo()` instead of emitting `'todoAdded'` events
+- **Type inference**: Rarely write `<Type>` brackets - TypeScript infers everything from the target
+- **Lens support**: Works with both `ModelAPI` and `FocusedModel` for nested updates
+
+```typescript
+// Advanced: Using with FocusedModel for nested state
+const profileLens = lens(
+  (state: UserState) => state.profile,
+  (state, profile) => ({ ...state, profile })
+)
+
+const focused = app.models.user.focus(profileLens)
+
+// Create events scoped to the focused subset
+export const [onUpdateBio, updateBio] = createModelEvent(
+  focused,
+  (bio: string, draft) => {
+    draft.bio = bio
+    draft.lastUpdated = Date.now()
+    // Note: context is undefined for FocusedModel
+  }
+)
+
+// Create subjects for focused data
+export const userBio = createModelSubject(focused, profile => profile.bio)
+
+// Usage
+updateBio('Full-stack developer')
+console.log(userBio()) // "Full-stack developer"
 ```
 
 ## FAQ

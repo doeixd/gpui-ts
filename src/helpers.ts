@@ -14,7 +14,18 @@
  * - Development utilities
  */
 
-import type { AppSchema, ModelSchema, ValidationResult, Path } from './index'
+import type {
+  AppSchema,
+  ModelSchema,
+  ValidationResult,
+  Path,
+  ModelAPI,
+  FocusedModel,
+  ModelContext,
+  EventHandler,
+  Subject
+} from './index'
+import { createEvent, createSubject } from './index'
 
 // =============================================================================
 // SCHEMA BUILDER TYPES
@@ -978,6 +989,276 @@ export function addEventToSchema<
   ? SchemaBuilder<TSchema & { events: { [K in TEventName]: { payload: TPayload } } }>
   : never {
   return builder.events({ [eventName]: payloadDef } as any) as any
+}
+
+// =============================================================================
+// FUNCTIONAL CONTROLLER UTILITIES
+// =============================================================================
+
+/**
+ * Creates an event that automatically updates a model when emitted.
+ *
+ * This utility bridges the event system with model updates, creating a "Functional Controller"
+ * pattern that decouples business logic (actions) from state definitions (schemas).
+ * When the returned emit function is called, it automatically runs the handler against
+ * the target model, ensuring reactive subscriptions are triggered.
+ *
+ * @template TState The model state type (inferred from target)
+ * @template TPayload The event payload type (default: void)
+ *
+ * @param target The model or focused model to update when event is emitted
+ * @param handler Function that receives payload, draft state, and optional context.
+ *                For ModelAPI targets, full ModelContext is provided.
+ *                For FocusedModel targets, context is undefined.
+ *
+ * @returns A tuple of [EventHandler, emit function] where:
+ *          - EventHandler: Can be subscribed to, chained with .map()/.filter(), etc.
+ *          - emit function: Triggers the handler with the given payload
+ *
+ * @example
+ * ```ts
+ * // Basic usage with ModelAPI
+ * const userModel = app.models.user
+ *
+ * const [onLogin, emitLogin] = createModelEvent(
+ *   userModel,
+ *   (credentials, draft, ctx) => {
+ *     draft.isAuthenticated = true
+ *     draft.user = credentials.user
+ *     ctx?.emit({ type: 'auth:success' })
+ *   }
+ * )
+ *
+ * // Emit the event to update the model
+ * emitLogin({ user: { id: '123', name: 'Alice' } })
+ *
+ * // Subscribe to the event for side effects
+ * onLogin.subscribe(credentials => {
+ *   console.log('Login event fired:', credentials)
+ * })
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Usage with FocusedModel (context will be undefined)
+ * const profileLens = app.models.user.focus(state => state.profile)
+ *
+ * const [onUpdateBio, updateBio] = createModelEvent(
+ *   profileLens,
+ *   (bio: string, draft) => {
+ *     draft.bio = bio
+ *     draft.lastUpdated = Date.now()
+ *   }
+ * )
+ *
+ * updateBio('I love functional programming!')
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Event transformation chains
+ * const [onTodoAdd, addTodo] = createModelEvent(
+ *   app.models.todos,
+ *   (text: string, draft) => {
+ *     draft.items.push({ id: Date.now(), text, completed: false })
+ *   }
+ * )
+ *
+ * // Transform events before they reach subscribers
+ * const longTodosOnly = onTodoAdd
+ *   .filter(text => text.length > 10)
+ *   .map(text => ({ text, priority: 'high' }))
+ *
+ * longTodosOnly.subscribe(data => {
+ *   console.log('Long todo added:', data)
+ * })
+ * ```
+ *
+ * @remarks
+ * - For ModelAPI targets, the handler receives full ModelContext with access to
+ *   ctx.notify(), ctx.emit(), ctx.batch(), etc.
+ * - For FocusedModel targets, context is undefined since FocusedModel.update()
+ *   doesn't provide context to user updaters (notifications are handled automatically)
+ * - Errors in the handler trigger automatic state rollback via the transactional
+ *   update system
+ * - The returned EventHandler supports all standard event transformations:
+ *   .map(), .filter(), .debounce(), .throttle(), .toSubject()
+ */
+export function createModelEvent<TState extends object, TPayload = void>(
+  target: ModelAPI<TState, any, any> | FocusedModel<TState, any>,
+  handler: (payload: TPayload, draft: TState, ctx?: ModelContext<TState>) => void
+): [EventHandler<TPayload, TPayload>, (payload: TPayload) => void] {
+  // Create the base event handler and emit function
+  const [eventHandler, emit] = createEvent<TPayload>()
+
+  // Detect target type by checking for the 'root' method (FocusedModel-specific)
+  const isFocusedModel = 'root' in target && typeof (target as any).root === 'function'
+
+  // Subscribe to events and wire them to model updates
+  eventHandler.subscribe((payload: TPayload) => {
+    if (isFocusedModel) {
+      // FocusedModel path: No context available to user
+      // FocusedModel.update signature: (updater: (focus: TFocus | undefined) => TFocus | void) => void
+      // Note: FocusedModel automatically calls ctx.notify() internally
+      const focusedTarget = target as FocusedModel<TState, any>
+      focusedTarget.update((draft) => {
+        // Call handler with undefined context
+        handler(payload, draft as TState, undefined)
+        // Return the draft (optional - can also mutate and return void)
+        return draft as TState
+      })
+    } else {
+      // ModelAPI path: Full context available
+      // ModelAPI.update signature: (updater: (state: T, ctx: ModelContext<T>) => void) => void
+      const modelTarget = target as ModelAPI<TState, any, any>
+      modelTarget.update((draft, ctx) => {
+        // Call handler with full context
+        handler(payload, draft, ctx)
+        // Manually trigger notifications for reactive subscriptions
+        ctx.notify()
+      })
+    }
+  })
+
+  // Return the event handler and emit function
+  return [eventHandler, emit]
+}
+
+/**
+ * Creates a reactive Subject that automatically syncs with model state changes.
+ *
+ * This utility creates a "live view" of model state via a selector function.
+ * The subject subscribes to the model's onChange event and updates its value
+ * whenever the selector result changes (using deep equality comparison).
+ * This enables the "Functional Controller" pattern for reactive reads.
+ *
+ * @template TState The model state type (inferred from target)
+ * @template TResult The selected value type (inferred from selector return type)
+ *
+ * @param target The model or focused model to observe
+ * @param selector Function that extracts a value from the state
+ *
+ * @returns A Subject that tracks the selected value and updates automatically.
+ *          The subject can be:
+ *          - Called as a function to read current value: `subject()`
+ *          - Subscribed to for change notifications: `subject.subscribe(callback)`
+ *          - Derived from: `subject.derive(transform)`
+ *
+ * @example
+ * ```ts
+ * // Create a reactive count of active todos
+ * const todoModel = app.models.todos
+ *
+ * const activeCount = createModelSubject(
+ *   todoModel,
+ *   (state) => state.items.filter(t => !t.completed).length
+ * )
+ *
+ * // Read current value
+ * console.log(activeCount()) // 5
+ *
+ * // Subscribe to changes
+ * activeCount.subscribe(() => {
+ *   console.log('Active count changed:', activeCount())
+ * })
+ *
+ * // Update the model - subject updates automatically
+ * todoModel.updateAndNotify(state => {
+ *   state.items[0].completed = true
+ * })
+ * // Console: "Active count changed: 4"
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Derive new subjects from existing ones
+ * const userModel = app.models.user
+ *
+ * const userName = createModelSubject(userModel, s => s.name)
+ * const userGreeting = userName.derive(name => `Hello, ${name}!`)
+ *
+ * console.log(userGreeting()) // "Hello, Alice!"
+ *
+ * userModel.set('name', 'Bob')
+ * console.log(userGreeting()) // "Hello, Bob!"
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Use with FocusedModel for scoped selections
+ * const profileLens = app.models.user.focus(state => state.profile)
+ *
+ * const bio = createModelSubject(profileLens, profile => profile.bio)
+ *
+ * console.log(bio()) // "Software engineer"
+ *
+ * profileLens.update(p => { p.bio = "Full-stack developer" })
+ * console.log(bio()) // "Full-stack developer"
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Complex selectors with transformations
+ * const stats = createModelSubject(
+ *   app.models.todos,
+ *   state => ({
+ *     total: state.items.length,
+ *     completed: state.items.filter(t => t.completed).length,
+ *     percentage: state.items.length > 0
+ *       ? (state.items.filter(t => t.completed).length / state.items.length) * 100
+ *       : 0
+ *   })
+ * )
+ *
+ * console.log(stats()) // { total: 10, completed: 7, percentage: 70 }
+ * ```
+ *
+ * @remarks
+ * - Uses JSON.stringify() for deep equality comparison to prevent unnecessary updates
+ * - For large objects, prefer narrow selectors to optimize performance
+ * - The subject only updates when the selector result changes (memoization)
+ * - Works with both ModelAPI and FocusedModel targets
+ * - Subscriptions live as long as the subject exists (no explicit cleanup needed
+ *   unless you need to manually unsubscribe from individual listeners)
+ * - Handles undefined focus gracefully for FocusedModel targets
+ */
+export function createModelSubject<TState extends object, TResult>(
+  target: ModelAPI<TState, any, any> | FocusedModel<TState, any>,
+  selector: (state: TState) => TResult
+): Subject<TResult> {
+  // Get initial value from current state
+  const currentState = target.read() as TState
+  const initialValue = selector(currentState)
+
+  // Create the subject with initial value
+  const subject = createSubject<TResult>(initialValue)
+
+  // Track previous result for memoization
+  let previousResult = initialValue
+
+  // Subscribe to model changes and update subject when selector result changes
+  target.onChange((current) => {
+    try {
+      // Run selector on new state
+      const newResult = selector(current as TState)
+
+      // Deep equality check using JSON.stringify
+      // Only update if the selector result has changed
+      const hasChanged = JSON.stringify(previousResult) !== JSON.stringify(newResult)
+
+      if (hasChanged) {
+        previousResult = newResult
+        subject.set(newResult)
+      }
+    } catch (error) {
+      // If selector throws, log error but keep previous value
+      console.error('[createModelSubject] Selector error:', error)
+      // Don't update subject - keep previous value
+    }
+  })
+
+  // Return the subject
+  return subject
 }
 
 // =============================================================================
