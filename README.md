@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/doeixd/gpui-ts)
+
 # GPUI-TS
 
 A type-safe reactive state management framework inspired by GPUI and solid-events. GPUI-TS provides centralized model ownership, functional reactive event composition, and declarative rendering with lit-html integration.
