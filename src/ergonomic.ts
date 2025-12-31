@@ -427,8 +427,8 @@ export function useOptimistic<TState extends object, TArgs extends any[]>(
   const optimisticState = createSubject<DeepReadonly<TState>>(getSourceValue());
 
   // 2. Keep the optimistic state in sync with the source of truth.
-  const unsubscribe = typeof source === 'function'
-    ? source.subscribe((...args: any[]) => {
+  const _unsubscribe = typeof source === 'function'
+    ? source.subscribe(() => {
         // Subject.subscribe passes no arguments, so we call optimisticState.set with current value
         optimisticState.set(source());
       })
@@ -436,9 +436,12 @@ export function useOptimistic<TState extends object, TArgs extends any[]>(
         return optimisticState.set(structuredClone(newState) as DeepReadonly<TState>);
       });
 
+  // Mark as intentionally unused (for future cleanup integration)
+  void _unsubscribe;
+
   // This is a placeholder for a real effect cleanup if this were in a component context.
   // In a real app, you'd tie this to a view's lifecycle.
-  // onCleanup(unsubscribe); 
+  // onCleanup(_unsubscribe); 
 
   const startOptimisticUpdate = async (
     action: (currentState: DeepReadonly<TState>, ...args: TArgs) => DeepReadonly<TState>,
