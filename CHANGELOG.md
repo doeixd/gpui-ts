@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.2](https://github.com/doeixd/gpui-ts/compare/v0.2.1...v0.2.2) (2025-12-31)
+
+
+### Features
+
+* add createAppEvent for unified event bus pattern ([cb8b1bd](https://github.com/doeixd/gpui-ts/commit/cb8b1bd0ccc271ceeeb4766de808337e89701ac6))
+
 ### [0.2.1](https://github.com/doeixd/gpui-ts/compare/v0.2.0...v0.2.1) (2025-12-31)
 
 
