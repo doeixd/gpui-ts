@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.2.1](https://github.com/doeixd/gpui-ts/compare/v0.2.0...v0.2.1) (2025-12-31)
+
+
+### Bug Fixes
+
+* resolve TypeScript unused variable warnings in ergonomic.ts ([f1b7dd2](https://github.com/doeixd/gpui-ts/commit/f1b7dd24487bc264ed23c1106d937eeea80e1bd9))
+
 ### [0.1.1](https://github.com/doeixd/gpui-ts/compare/v0.1.0...v0.1.1) (2025-10-07)
 
 
